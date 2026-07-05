@@ -432,15 +432,21 @@ func (handlers welfareHandlers) getRaffleDetail(writer http.ResponseWriter, requ
 }
 
 func (handlers welfareHandlers) joinRaffle(writer http.ResponseWriter, request *http.Request) {
-	user, ok := auth.UserFromRequest(
-		request,
-		handlers.deps.Config.SessionSecret,
-		handlers.deps.Config.AdminUsernames,
-	)
+	if handlers.rejectUntrustedUnsafeRequest(writer, request) {
+		return
+	}
+	shared := economyHandlers{deps: handlers.deps}
+	user, ok := shared.requireUser(writer, request)
 	if !ok {
-		writeJSON(writer, http.StatusUnauthorized, map[string]any{
+		return
+	}
+	if shared.rejectRateLimited(writer, request, *user, raffleJoinRateLimit) {
+		return
+	}
+	if handlers.deps.DB == nil {
+		writeJSON(writer, http.StatusServiceUnavailable, map[string]any{
 			"success": false,
-			"message": "请先登录",
+			"message": "抽奖数据库未配置",
 		})
 		return
 	}

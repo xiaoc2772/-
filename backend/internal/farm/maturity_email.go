@@ -196,41 +196,17 @@ func (service *Service) ProcessMaturityEmails(ctx context.Context, input Maturit
 	result := MaturityEmailScanResult{Success: true, Cursor: nextCursor}
 	for _, userID := range userIDs {
 		result.ScannedUsers++
-		record, err := service.store.GetState(ctx, userID)
+		state, exists, err := service.advanceUserStateLocked(ctx, userID, nowMs)
 		if err != nil {
 			result.Failed++
 			continue
 		}
-		if !record.Exists {
+		if !exists {
 			continue
 		}
-		var state FarmState
-		if err := json.Unmarshal(record.StateJSON, &state); err != nil {
-			result.Failed++
-			continue
-		}
-		if state.UserID <= 0 {
-			state.UserID = userID
-		}
-		state = normalizeState(state, nowMs)
-		stateChanged := tickBasicCropState(&state, nowMs)
 		emailResult, err := service.processMaturityEmailEventsForState(ctx, &state, input.Sender, nowMs)
 		if err != nil {
 			result.Failed++
-		}
-		passiveChanged, err := service.processPassivePetSkills(ctx, userID, &state, nowMs)
-		if err != nil {
-			result.Failed++
-		}
-		pointsChanged, err := service.syncPointsFromLedger(ctx, userID, record.Exists, &state, nowMs)
-		if err != nil {
-			result.Failed++
-		}
-		if stateChanged || passiveChanged || pointsChanged {
-			if err := service.saveState(ctx, userID, state, nowMs); err != nil {
-				result.Failed++
-				continue
-			}
 		}
 		result.ProcessedUsers++
 		result.CheckedEvents += emailResult.Checked

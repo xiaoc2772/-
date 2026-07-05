@@ -1971,6 +1971,111 @@ func TestServiceExecuteStealFailurePersistsAttemptWithoutPoints(t *testing.T) {
 	}
 }
 
+func TestServiceGetStatusSerializesWithConcurrentHarvest(t *testing.T) {
+	ctx := context.Background()
+	databaseURL := os.Getenv("TEST_DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("TEST_DATABASE_URL 未设置，跳过 PostgreSQL 集成测试")
+	}
+
+	db, err := dbpostgres.Open(ctx, databaseURL)
+	if err != nil {
+		t.Fatalf("open postgres failed: %v", err)
+	}
+	defer db.Close()
+
+	if _, err := pgmigration.NewRunner(db, migrationsDir(t)).Apply(ctx, false); err != nil {
+		t.Fatalf("apply migrations failed: %v", err)
+	}
+
+	nowMs := time.Date(2025, 1, 6, 4, 0, 0, 0, time.UTC).UnixMilli()
+	userID := int64(99610)
+	cleanupFarmStoreUser(t, ctx, db, userID)
+	defer cleanupFarmStoreUser(t, ctx, db, userID)
+	insertFarmTestUser(t, ctx, db, userID, "farm_status_race")
+	if _, err := db.Exec(ctx,
+		`INSERT INTO point_accounts (user_id, balance, updated_at)
+		 VALUES ($1, 100, now())`,
+		userID,
+	); err != nil {
+		t.Fatalf("insert point account failed: %v", err)
+	}
+
+	state := newInitialState(userID, nowMs)
+	state.Points = 100
+	state.Pet = json.RawMessage(`{"type":"cat","name":"小咪","stage":"adult","growth":180,"hunger":80,"cleanliness":80,"mood":60,"thirst":80,"hydrationVersion":2,"health":85,"learnedSkills":["harvest"],"currentTask":null,"taskStartAt":null,"taskEndAt":null,"cooldownEndAt":null,"feedToday":{"normal":0,"premium":0},"washToday":0,"waterToday":0,"playToday":0,"toyToday":0,"dailyResetAt":0}`)
+	state.Events = json.RawMessage(`[]`)
+	state.Bonuses = json.RawMessage(`{"firstWater":true,"firstHarvest":true,"firstAdopt":true}`)
+	state.Lands[0].Status = LandStatusMature
+	state.Lands[0].Crop = &CropInstance{
+		CropID:         CropWheat,
+		PlantedAt:      nowMs - 60*60*1000,
+		MatureAt:       nowMs - 1,
+		LastWaterAt:    nowMs - 60*60*1000,
+		NextWaterDueAt: nowMs,
+		WaterMissCount: 0,
+		PlantedSeason:  getCurrentSeason(nowMs),
+		WeatherAtPlant: WeatherSunny,
+	}
+	expectedHarvest, ok := buildHarvestResult(state, 0, nowMs)
+	if !ok || expectedHarvest.FinalYield <= 0 {
+		t.Fatalf("expected positive harvest fixture, got %+v", expectedHarvest)
+	}
+	store := NewStore(db)
+	saveFarmStateFixture(t, ctx, store, state, nowMs)
+
+	// 用外部事务锁住 farm_states 行，制造手动收获与 /status 被动收菜的并发窗口
+	blocker, err := db.Begin(ctx)
+	if err != nil {
+		t.Fatalf("begin blocker tx failed: %v", err)
+	}
+	defer func() { _ = blocker.Rollback(ctx) }()
+	if _, err := blocker.Exec(ctx, `SELECT 1 FROM farm_states WHERE user_id = $1 FOR UPDATE`, userID); err != nil {
+		t.Fatalf("lock farm state failed: %v", err)
+	}
+
+	service := NewService(store)
+	harvestDone := make(chan error, 1)
+	statusDone := make(chan error, 1)
+	go func() {
+		_, err := service.ExecuteHarvest(ctx, userID, 0, nowMs)
+		harvestDone <- err
+	}()
+	time.Sleep(300 * time.Millisecond)
+	go func() {
+		_, err := service.GetStatus(ctx, userID, nowMs)
+		statusDone <- err
+	}()
+	time.Sleep(700 * time.Millisecond)
+	if err := blocker.Rollback(ctx); err != nil {
+		t.Fatalf("release blocker tx failed: %v", err)
+	}
+	if err := <-harvestDone; err != nil {
+		t.Fatalf("execute harvest failed: %v", err)
+	}
+	if err := <-statusDone; err != nil {
+		t.Fatalf("get status failed: %v", err)
+	}
+
+	var credited int64
+	if err := db.QueryRow(ctx,
+		`SELECT COALESCE(SUM(amount), 0) FROM point_ledger WHERE user_id = $1 AND amount > 0`,
+		userID,
+	).Scan(&credited); err != nil {
+		t.Fatalf("read credited points failed: %v", err)
+	}
+	if credited != expectedHarvest.FinalYield {
+		t.Fatalf("同一作物只应发放一次收获积分 %d，实际发放 %d", expectedHarvest.FinalYield, credited)
+	}
+	var balance int64
+	if err := db.QueryRow(ctx, `SELECT balance FROM point_accounts WHERE user_id = $1`, userID).Scan(&balance); err != nil {
+		t.Fatalf("read point balance failed: %v", err)
+	}
+	if balance != 100+expectedHarvest.FinalYield {
+		t.Fatalf("expected balance %d, got %d", 100+expectedHarvest.FinalYield, balance)
+	}
+}
+
 func findFridayEventUserInRange(t *testing.T, nowMs int64, targetIndex int, minUserID int64, maxUserID int64) int64 {
 	t.Helper()
 	date := getChinaDateString(nowMs)

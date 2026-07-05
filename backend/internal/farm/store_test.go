@@ -17,13 +17,4 @@ func TestStoreReturnsUnavailableWithoutDatabase(t *testing.T) {
 	if _, err := store.ListDailyPurchases(context.Background(), 1, "2026-06-23"); !errors.Is(err, ErrUnavailable) {
 		t.Fatalf("expected ErrUnavailable from ListDailyPurchases, got %v", err)
 	}
-	if _, _, err := store.GetPointBalance(context.Background(), 1); !errors.Is(err, ErrUnavailable) {
-		t.Fatalf("expected ErrUnavailable from GetPointBalance, got %v", err)
-	}
-	if _, err := store.EnsureInitialPointGrant(context.Background(), 1, 100, 1); !errors.Is(err, ErrUnavailable) {
-		t.Fatalf("expected ErrUnavailable from EnsureInitialPointGrant, got %v", err)
-	}
-	if _, _, err := store.AddFarmPoints(context.Background(), 1, 10, "ledger", "desc", 1); !errors.Is(err, ErrUnavailable) {
-		t.Fatalf("expected ErrUnavailable from AddFarmPoints, got %v", err)
-	}
 }

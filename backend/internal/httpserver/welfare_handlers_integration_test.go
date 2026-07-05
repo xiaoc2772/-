@@ -24,6 +24,7 @@ import (
 	"redemption/backend/internal/welfare"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/redis/go-redis/v9"
 )
 
 func TestRaffleJoinRouteDrawsAndDeliversThresholdRaffle(t *testing.T) {
@@ -65,6 +66,8 @@ func TestRaffleJoinRouteDrawsAndDeliversThresholdRaffle(t *testing.T) {
 		DB:     db,
 	})
 	request := httptest.NewRequest(http.MethodPost, "/api/raffle/"+raffleID+"/join", nil)
+	request.Host = "example.com"
+	request.Header.Set("Origin", "http://example.com")
 	request.AddCookie(testSessionCookieFor(userID, "join_user", "Join User"))
 	response := httptest.NewRecorder()
 	handler.ServeHTTP(response, request)
@@ -126,6 +129,85 @@ func TestRaffleJoinRouteDrawsAndDeliversThresholdRaffle(t *testing.T) {
 	}
 }
 
+func TestRaffleJoinRouteRejectsRevokedSession(t *testing.T) {
+	ctx := context.Background()
+	databaseURL := os.Getenv("TEST_DATABASE_URL")
+	redisURL := os.Getenv("TEST_REDIS_URL")
+	if databaseURL == "" || redisURL == "" {
+		t.Skip("TEST_DATABASE_URL 或 TEST_REDIS_URL 未设置，跳过集成测试")
+	}
+
+	db, err := dbpostgres.Open(ctx, databaseURL)
+	if err != nil {
+		t.Fatalf("open postgres failed: %v", err)
+	}
+	defer db.Close()
+
+	if _, err := pgmigration.NewRunner(db, httpMigrationsDir(t)).Apply(ctx, false); err != nil {
+		t.Fatalf("apply migrations failed: %v", err)
+	}
+
+	options, err := redis.ParseURL(redisURL)
+	if err != nil {
+		t.Fatalf("parse redis url failed: %v", err)
+	}
+	client := redis.NewClient(options)
+	defer client.Close()
+
+	suffix := time.Now().UnixNano()
+	raffleID := "http-join-revoked-" + stringID(suffix)
+	userID := int64(17001 + suffix%1_000_000_000)
+	if _, err := db.Exec(ctx,
+		`INSERT INTO raffles (
+		   id, mode, title, description, prizes, trigger_type, threshold, status,
+		   participants_count, winners_count, created_by, created_at_ms, updated_at_ms
+		 ) VALUES ($1, 'draw', '撤销会话测试', '撤销会话测试',
+		           '[{"id":"p1","name":"10积分","points":10,"quantity":1}]'::jsonb,
+		           'threshold', 999, 'active', 0, 0, 0, $2, $2)`,
+		raffleID,
+		time.Now().UnixMilli(),
+	); err != nil {
+		t.Fatalf("seed raffle failed: %v", err)
+	}
+
+	jti := "join-revoked-" + stringID(suffix)
+	if err := client.Set(ctx, sessionBlacklistKeyPrefix+jti, "1", time.Minute).Err(); err != nil {
+		t.Fatalf("blacklist session failed: %v", err)
+	}
+	defer func() {
+		_ = client.Del(ctx, sessionBlacklistKeyPrefix+jti).Err()
+	}()
+
+	handler := New(Dependencies{
+		Config: config.Config{SessionSecret: testSessionSecret},
+		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+		DB:     db,
+		Redis:  client,
+	})
+	request := httptest.NewRequest(http.MethodPost, "/api/raffle/"+raffleID+"/join", nil)
+	request.Host = "example.com"
+	request.Header.Set("Origin", "http://example.com")
+	request.AddCookie(testSessionCookieForWithJTI(userID, "revoked_join_user", "Revoked Join User", jti))
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+
+	if response.Code != http.StatusUnauthorized || !strings.Contains(response.Body.String(), "登录已失效") {
+		t.Fatalf("expected revoked session join to be rejected, got status=%d body=%s", response.Code, response.Body.String())
+	}
+
+	var entryCount int64
+	if err := db.QueryRow(ctx,
+		`SELECT COUNT(*) FROM raffle_entries WHERE raffle_id = $1 AND user_id = $2`,
+		raffleID,
+		userID,
+	).Scan(&entryCount); err != nil {
+		t.Fatalf("query raffle entries failed: %v", err)
+	}
+	if entryCount != 0 {
+		t.Fatalf("撤销会话不应产生参与记录，实际 %d 条", entryCount)
+	}
+}
+
 func TestRaffleJoinRouteGrabsRedPacket(t *testing.T) {
 	ctx := context.Background()
 	databaseURL := os.Getenv("TEST_DATABASE_URL")
@@ -166,6 +248,8 @@ func TestRaffleJoinRouteGrabsRedPacket(t *testing.T) {
 		DB:     db,
 	})
 	request := httptest.NewRequest(http.MethodPost, "/api/raffle/"+raffleID+"/join", nil)
+	request.Host = "example.com"
+	request.Header.Set("Origin", "http://example.com")
 	request.AddCookie(testSessionCookieFor(userID, "packet_user", "Packet User"))
 	response := httptest.NewRecorder()
 	handler.ServeHTTP(response, request)

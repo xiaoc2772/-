@@ -16,23 +16,6 @@ func TestSafeMulDetectsOverflow(t *testing.T) {
 	}
 }
 
-func TestDefaultStoreItemsKeepExistingPrices(t *testing.T) {
-	byID := map[string]defaultItem{}
-	for _, item := range defaultItems {
-		byID[item.ID] = item
-	}
-
-	if byID["card-draw-1"].PointsCost != 900 {
-		t.Fatalf("card draw price drifted: %d", byID["card-draw-1"].PointsCost)
-	}
-	if byID["makeup-card-1"].PointsCost != 30 {
-		t.Fatalf("makeup card price drifted: %d", byID["makeup-card-1"].PointsCost)
-	}
-	if byID["lottery-spin-1"].DailyLimit == nil || *byID["lottery-spin-1"].DailyLimit != 1 {
-		t.Fatalf("lottery-spin-1 should keep daily limit 1")
-	}
-}
-
 func TestIsRetryableTxError(t *testing.T) {
 	if !isRetryableTxError(&pgconn.PgError{Code: "40001"}) {
 		t.Fatalf("serialization failures should be retryable")

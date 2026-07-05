@@ -232,182 +232,9 @@ func (store *Store) listStealCandidateRecords(ctx context.Context, currentUserID
 	return records, rows.Err()
 }
 
-func (store *Store) GetPointBalance(ctx context.Context, userID int64) (int64, bool, error) {
-	if store.db == nil {
-		return 0, false, ErrUnavailable
-	}
+func (store *Store) getStateForUpdateTx(ctx context.Context, tx pgx.Tx, userID int64) (FarmState, bool, error) {
 	if userID <= 0 {
-		return 0, false, errors.New("userID must be positive")
-	}
-
-	var balance int64
-	err := store.db.QueryRow(ctx,
-		`SELECT balance FROM point_accounts WHERE user_id = $1`,
-		userID,
-	).Scan(&balance)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return 0, false, nil
-	}
-	if err != nil {
-		return 0, false, err
-	}
-	return balance, true, nil
-}
-
-func (store *Store) EnsureInitialPointGrant(ctx context.Context, userID int64, amount int64, nowMs int64) (int64, error) {
-	if store.db == nil {
-		return 0, ErrUnavailable
-	}
-	if userID <= 0 {
-		return 0, errors.New("userID must be positive")
-	}
-	if amount <= 0 {
-		return 0, errors.New("amount must be positive")
-	}
-
-	tx, err := store.db.Begin(ctx)
-	if err != nil {
-		return 0, err
-	}
-	defer func() { _ = tx.Rollback(ctx) }()
-
-	if _, err := tx.Exec(ctx,
-		`INSERT INTO point_accounts (user_id, balance, updated_at)
-		 VALUES ($1, 0, now())
-		 ON CONFLICT (user_id) DO NOTHING`,
-		userID,
-	); err != nil {
-		return 0, err
-	}
-
-	var balance int64
-	if err := tx.QueryRow(ctx,
-		`SELECT balance FROM point_accounts WHERE user_id = $1 FOR UPDATE`,
-		userID,
-	).Scan(&balance); err != nil {
-		return 0, err
-	}
-	if balance > 0 {
-		if err := tx.Commit(ctx); err != nil {
-			return 0, err
-		}
-		return balance, nil
-	}
-
-	ledgerID := fmt.Sprintf("farm_initial_%d", userID)
-	commandTag, err := tx.Exec(ctx,
-		`INSERT INTO point_ledger (id, user_id, amount, source, description, balance_after, created_at)
-		 VALUES ($1, $2, $3, 'game_play', '开心农场初始积分', $3, to_timestamp($4::double precision / 1000.0))
-		 ON CONFLICT (id) DO NOTHING`,
-		ledgerID,
-		userID,
-		amount,
-		nowMs,
-	)
-	if err != nil {
-		return 0, err
-	}
-	if commandTag.RowsAffected() > 0 {
-		balance = amount
-		if _, err := tx.Exec(ctx,
-			`UPDATE point_accounts SET balance = $1, updated_at = now() WHERE user_id = $2`,
-			balance,
-			userID,
-		); err != nil {
-			return 0, err
-		}
-	}
-
-	if err := tx.Commit(ctx); err != nil {
-		return 0, err
-	}
-	return balance, nil
-}
-
-func (store *Store) AddFarmPoints(ctx context.Context, userID int64, amount int64, ledgerID string, description string, nowMs int64) (int64, bool, error) {
-	if store.db == nil {
-		return 0, false, ErrUnavailable
-	}
-	if userID <= 0 {
-		return 0, false, errors.New("userID must be positive")
-	}
-	ledgerID = strings.TrimSpace(ledgerID)
-	if ledgerID == "" {
-		return 0, false, errors.New("ledgerID is required")
-	}
-	description = strings.TrimSpace(description)
-	if description == "" {
-		return 0, false, errors.New("description is required")
-	}
-	if amount < 0 {
-		return 0, false, errors.New("amount must not be negative")
-	}
-
-	tx, err := store.db.Begin(ctx)
-	if err != nil {
-		return 0, false, err
-	}
-	defer func() { _ = tx.Rollback(ctx) }()
-
-	if _, err := tx.Exec(ctx,
-		`INSERT INTO point_accounts (user_id, balance, updated_at)
-		 VALUES ($1, 0, now())
-		 ON CONFLICT (user_id) DO NOTHING`,
-		userID,
-	); err != nil {
-		return 0, false, err
-	}
-
-	var balance int64
-	if err := tx.QueryRow(ctx,
-		`SELECT balance FROM point_accounts WHERE user_id = $1 FOR UPDATE`,
-		userID,
-	).Scan(&balance); err != nil {
-		return 0, false, err
-	}
-	if amount == 0 {
-		if err := tx.Commit(ctx); err != nil {
-			return 0, false, err
-		}
-		return balance, false, nil
-	}
-
-	nextBalance := balance + amount
-	commandTag, err := tx.Exec(ctx,
-		`INSERT INTO point_ledger (id, user_id, amount, source, description, balance_after, created_at)
-		 VALUES ($1, $2, $3, 'game_play', $4, $5, to_timestamp($6::double precision / 1000.0))
-		 ON CONFLICT (id) DO NOTHING`,
-		ledgerID,
-		userID,
-		amount,
-		description,
-		nextBalance,
-		nowMs,
-	)
-	if err != nil {
-		return 0, false, err
-	}
-	applied := commandTag.RowsAffected() > 0
-	if applied {
-		balance = nextBalance
-		if _, err := tx.Exec(ctx,
-			`UPDATE point_accounts SET balance = $1, updated_at = now() WHERE user_id = $2`,
-			balance,
-			userID,
-		); err != nil {
-			return 0, false, err
-		}
-	}
-
-	if err := tx.Commit(ctx); err != nil {
-		return 0, false, err
-	}
-	return balance, applied, nil
-}
-
-func (store *Store) getOrCreateStateForUpdateTx(ctx context.Context, tx pgx.Tx, userID int64, nowMs int64) (FarmState, error) {
-	if userID <= 0 {
-		return FarmState{}, errors.New("userID must be positive")
+		return FarmState{}, false, errors.New("userID must be positive")
 	}
 	var raw []byte
 	err := tx.QueryRow(ctx,
@@ -417,21 +244,32 @@ func (store *Store) getOrCreateStateForUpdateTx(ctx context.Context, tx pgx.Tx, 
 		  FOR UPDATE`,
 		userID,
 	).Scan(&raw)
-	if err == nil {
-		var state FarmState
-		if err := json.Unmarshal(raw, &state); err != nil {
-			return FarmState{}, err
-		}
-		if state.UserID <= 0 {
-			state.UserID = userID
-		}
-		return state, nil
+	if errors.Is(err, pgx.ErrNoRows) {
+		return FarmState{}, false, nil
 	}
-	if !errors.Is(err, pgx.ErrNoRows) {
+	if err != nil {
+		return FarmState{}, false, err
+	}
+	var state FarmState
+	if err := json.Unmarshal(raw, &state); err != nil {
+		return FarmState{}, false, err
+	}
+	if state.UserID <= 0 {
+		state.UserID = userID
+	}
+	return state, true, nil
+}
+
+func (store *Store) getOrCreateStateForUpdateTx(ctx context.Context, tx pgx.Tx, userID int64, nowMs int64) (FarmState, error) {
+	state, exists, err := store.getStateForUpdateTx(ctx, tx, userID)
+	if err != nil {
 		return FarmState{}, err
 	}
+	if exists {
+		return state, nil
+	}
 
-	state := newInitialState(userID, nowMs)
+	state = newInitialState(userID, nowMs)
 	balance, err := store.ensureInitialPointGrantTx(ctx, tx, userID, initialPoints, nowMs)
 	if err != nil {
 		return FarmState{}, err

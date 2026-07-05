@@ -1038,6 +1038,94 @@ func TestClaimPublicProjectNewUserOnlyConsumedByNewUserClaim(t *testing.T) {
 	}
 }
 
+func TestClaimPublicProjectNewUserOnlyConcurrentClaimsConsumeOnce(t *testing.T) {
+	ctx := context.Background()
+	service, cleanup := newIntegrationService(t, ctx)
+	defer cleanup()
+
+	suffix := time.Now().UnixNano()
+	firstID := fmt.Sprintf("project-newuser-conc-a-%d", suffix)
+	secondID := fmt.Sprintf("project-newuser-conc-b-%d", suffix)
+	user := auth.User{ID: suffix, Username: fmt.Sprintf("tester-conc-%d", suffix)}
+
+	if err := seedClaimableProject(ctx, service, firstID, "新人福利并发A", true); err != nil {
+		t.Fatalf("seed 新人项目A失败: %v", err)
+	}
+	if err := seedClaimableProject(ctx, service, secondID, "新人福利并发B", true); err != nil {
+		t.Fatalf("seed 新人项目B失败: %v", err)
+	}
+
+	// 预建用户与积分账户，并用外部事务锁住积分账户行，
+	// 让两笔领取都推进到入账前，制造新人资格校验的并发窗口
+	if _, err := service.db.Exec(ctx,
+		`INSERT INTO users (id, username, display_name, first_seen_at, updated_at)
+		 VALUES ($1, $2, $2, now(), now())`,
+		user.ID,
+		user.Username,
+	); err != nil {
+		t.Fatalf("seed 用户失败: %v", err)
+	}
+	if _, err := service.db.Exec(ctx,
+		`INSERT INTO point_accounts (user_id, balance, updated_at)
+		 VALUES ($1, 0, now())`,
+		user.ID,
+	); err != nil {
+		t.Fatalf("seed 积分账户失败: %v", err)
+	}
+	blocker, err := service.db.Begin(ctx)
+	if err != nil {
+		t.Fatalf("begin blocker tx failed: %v", err)
+	}
+	defer func() { _ = blocker.Rollback(ctx) }()
+	if _, err := blocker.Exec(ctx,
+		`SELECT balance FROM point_accounts WHERE user_id = $1 FOR UPDATE`,
+		user.ID,
+	); err != nil {
+		t.Fatalf("lock point account failed: %v", err)
+	}
+
+	type claimOutcome struct {
+		result ClaimProjectResult
+		err    error
+	}
+	outcomes := make(chan claimOutcome, 2)
+	for _, projectID := range []string{firstID, secondID} {
+		projectID := projectID
+		go func() {
+			result, err := service.ClaimPublicProject(ctx, projectID, user)
+			outcomes <- claimOutcome{result: result, err: err}
+		}()
+	}
+	time.Sleep(700 * time.Millisecond)
+	if err := blocker.Rollback(ctx); err != nil {
+		t.Fatalf("release blocker tx failed: %v", err)
+	}
+
+	successCount := 0
+	for i := 0; i < 2; i++ {
+		outcome := <-outcomes
+		if outcome.err != nil {
+			t.Fatalf("并发领取新人项目出错: %v", outcome.err)
+		}
+		if outcome.result.Success {
+			successCount++
+		}
+	}
+	if successCount != 1 {
+		t.Fatalf("并发领取两个新人专属项目应只成功一次，实际成功 %d 次", successCount)
+	}
+	var claimCount int64
+	if err := service.db.QueryRow(ctx,
+		`SELECT COUNT(*) FROM exchange_logs WHERE user_id = $1 AND type = 'project_direct'`,
+		user.ID,
+	).Scan(&claimCount); err != nil {
+		t.Fatalf("read exchange logs failed: %v", err)
+	}
+	if claimCount != 1 {
+		t.Fatalf("新人资格只应被消耗一次，实际领取记录 %d 条", claimCount)
+	}
+}
+
 func newIntegrationService(t *testing.T, ctx context.Context) (*Service, func()) {
 	t.Helper()
 

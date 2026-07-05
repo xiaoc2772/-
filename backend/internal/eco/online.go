@@ -16,52 +16,71 @@ const (
 var ecoPrizeRollFloat = rand.Float64
 
 func (service *Service) advanceStateForUpdate(ctx context.Context, tx pgx.Tx, snapshot StateSnapshot, nowMs int64, allowOnlinePrizes bool) (StateSnapshot, TickResult, error) {
-	if err := service.pruneExpiredVisiblePrizes(ctx, tx, &snapshot, nowMs); err != nil {
-		return StateSnapshot{}, TickResult{}, err
-	}
-	if !allowOnlinePrizes {
-		next, tick := AdvanceState(snapshot, nowMs)
-		return next, tick, nil
-	}
-
-	stock, err := loadGlobalPrizeStockForUpdate(ctx, tx)
+	expiredLimited, err := service.pruneExpiredVisiblePrizes(ctx, tx, &snapshot, nowMs)
 	if err != nil {
 		return StateSnapshot{}, TickResult{}, err
 	}
-	rates, err := loadPrizeRateSettingsTx(ctx, tx)
-	if err != nil {
-		return StateSnapshot{}, TickResult{}, err
-	}
-	visibleSlots := int64(len(snapshot.VisiblePrizes))
-	reserved := defaultPrizeCountMap()
-	rollPrize := func() (string, bool) {
-		if visibleSlots >= maxVisiblePrizes {
-			return "", false
+
+	var next StateSnapshot
+	var tick TickResult
+	wanted := defaultPrizeCountMap()
+	if allowOnlinePrizes {
+		stock, err := loadGlobalPrizeStock(ctx, tx)
+		if err != nil {
+			return StateSnapshot{}, TickResult{}, err
 		}
-		boosted := snapshot.LuckyGenerationsRemaining > 0
-		if boosted {
-			snapshot.LuckyGenerationsRemaining = maxInt64(0, snapshot.LuckyGenerationsRemaining-1)
+		rates, err := loadPrizeRateSettingsTx(ctx, tx)
+		if err != nil {
+			return StateSnapshot{}, TickResult{}, err
 		}
-		multiplier := float64(1)
-		if boosted {
-			multiplier = ecoLuckyPrizeMultiplier
+		visibleSlots := int64(len(snapshot.VisiblePrizes))
+		rollPrize := func() (string, bool) {
+			if visibleSlots >= maxVisiblePrizes {
+				return "", false
+			}
+			boosted := snapshot.LuckyGenerationsRemaining > 0
+			if boosted {
+				snapshot.LuckyGenerationsRemaining = maxInt64(0, snapshot.LuckyGenerationsRemaining-1)
+			}
+			multiplier := float64(1)
+			if boosted {
+				multiplier = ecoLuckyPrizeMultiplier
+			}
+			prizeKey, ok := rollEcoGeneratedPrize(multiplier, rates)
+			if !ok {
+				return "", false
+			}
+			if stock[prizeKey] >= ecoPrizeDefinitions[prizeKey].GlobalLimit {
+				return "", false
+			}
+			stock[prizeKey]++
+			visibleSlots++
+			return prizeKey, true
 		}
-		prizeKey, ok := rollEcoGeneratedPrize(multiplier, rates)
-		if !ok {
-			return "", false
+
+		next, tick = AdvanceStateWithPrizeRoll(snapshot, nowMs, rollPrize)
+		next.LuckyGenerationsRemaining = snapshot.LuckyGenerationsRemaining
+		for _, prizeKey := range tick.PrizeKeys {
+			wanted[prizeKey]++
 		}
-		if stock[prizeKey] >= ecoPrizeDefinitions[prizeKey].GlobalLimit {
-			return "", false
-		}
-		stock[prizeKey]++
-		reserved[prizeKey]++
-		visibleSlots++
-		return prizeKey, true
+	} else {
+		next, tick = AdvanceState(snapshot, nowMs)
 	}
 
-	next, tick := AdvanceStateWithPrizeRoll(snapshot, nowMs, rollPrize)
-	next.LuckyGenerationsRemaining = snapshot.LuckyGenerationsRemaining
-	for _, prizeKey := range tick.PrizeKeys {
+	// 过期归还与新生成预留在同一循环内按 PrizeKeys 固定顺序结算，
+	// 每次只锁单个奖品行：既避免全表 FOR UPDATE 串行化所有请求，
+	// 也避免两个事务以不同顺序锁多行导致死锁。
+	grantedKeys := make([]string, 0, len(tick.PrizeKeys))
+	for _, prizeKey := range PrizeKeys {
+		granted, err := settleGlobalPrizeStock(ctx, tx, prizeKey, expiredLimited[prizeKey], wanted[prizeKey])
+		if err != nil {
+			return StateSnapshot{}, TickResult{}, err
+		}
+		for index := int64(0); index < granted; index++ {
+			grantedKeys = append(grantedKeys, prizeKey)
+		}
+	}
+	for _, prizeKey := range grantedKeys {
 		prizeID := randomID()
 		if err := insertVisiblePrize(ctx, tx, next.UserID, prizeID, prizeKey, nowMs, true); err != nil {
 			return StateSnapshot{}, TickResult{}, err
@@ -73,18 +92,11 @@ func (service *Service) advanceStateForUpdate(ctx context.Context, tx pgx.Tx, sn
 			Limited:     true,
 		})
 	}
-	for _, prizeKey := range PrizeKeys {
-		if reserved[prizeKey] <= 0 {
-			continue
-		}
-		if err := adjustGlobalPrizeStock(ctx, tx, prizeKey, reserved[prizeKey]); err != nil {
-			return StateSnapshot{}, TickResult{}, err
-		}
-	}
+	tick.PrizeKeys = grantedKeys
 	return next, tick, nil
 }
 
-func (service *Service) pruneExpiredVisiblePrizes(ctx context.Context, tx pgx.Tx, snapshot *StateSnapshot, nowMs int64) error {
+func (service *Service) pruneExpiredVisiblePrizes(ctx context.Context, tx pgx.Tx, snapshot *StateSnapshot, nowMs int64) (map[string]int64, error) {
 	active := make([]VisiblePrize, 0, len(snapshot.VisiblePrizes))
 	expiredIDs := []string{}
 	expiredLimited := defaultPrizeCountMap()
@@ -101,19 +113,11 @@ func (service *Service) pruneExpiredVisiblePrizes(ctx context.Context, tx pgx.Tx
 	}
 	if len(expiredIDs) > 0 {
 		if _, err := tx.Exec(ctx, `DELETE FROM eco_visible_prizes WHERE user_id = $1 AND id = ANY($2)`, snapshot.UserID, expiredIDs); err != nil {
-			return err
-		}
-	}
-	for _, prizeKey := range PrizeKeys {
-		if expiredLimited[prizeKey] <= 0 {
-			continue
-		}
-		if err := adjustGlobalPrizeStock(ctx, tx, prizeKey, -expiredLimited[prizeKey]); err != nil {
-			return err
+			return nil, err
 		}
 	}
 	snapshot.VisiblePrizes = active
-	return nil
+	return expiredLimited, nil
 }
 
 func rollEcoGeneratedPrize(multiplier float64, rates map[string]float64) (string, bool) {
@@ -134,19 +138,9 @@ func rollEcoGeneratedPrize(multiplier float64, rates map[string]float64) (string
 	return "", false
 }
 
-func loadGlobalPrizeStockForUpdate(ctx context.Context, tx pgx.Tx) (map[string]int64, error) {
+func loadGlobalPrizeStock(ctx context.Context, tx pgx.Tx) (map[string]int64, error) {
 	stock := defaultPrizeCountMap()
-	for _, prizeKey := range PrizeKeys {
-		if _, err := tx.Exec(ctx,
-			`INSERT INTO eco_global_prize_stock (prize_key, claimed_count, updated_at)
-			 VALUES ($1, 0, now())
-			 ON CONFLICT (prize_key) DO NOTHING`,
-			prizeKey,
-		); err != nil {
-			return nil, err
-		}
-	}
-	rows, err := tx.Query(ctx, `SELECT prize_key, claimed_count FROM eco_global_prize_stock FOR UPDATE`)
+	rows, err := tx.Query(ctx, `SELECT prize_key, claimed_count FROM eco_global_prize_stock`)
 	if err != nil {
 		return nil, err
 	}
@@ -164,17 +158,41 @@ func loadGlobalPrizeStockForUpdate(ctx context.Context, tx pgx.Tx) (map[string]i
 	return stock, rows.Err()
 }
 
-func adjustGlobalPrizeStock(ctx context.Context, tx pgx.Tx, prizeKey string, delta int64) error {
-	_, err := tx.Exec(ctx,
+// settleGlobalPrizeStock 在单个奖品行的行锁内先归还 refund 个过期配额，
+// 再最多预留 wanted 个新配额，返回实际预留数。行不存在时先补插，
+// 使无锁读取的快照过期时也不会突破 GlobalLimit。
+func settleGlobalPrizeStock(ctx context.Context, tx pgx.Tx, prizeKey string, refund int64, wanted int64) (int64, error) {
+	if refund <= 0 && wanted <= 0 {
+		return 0, nil
+	}
+	if _, err := tx.Exec(ctx,
 		`INSERT INTO eco_global_prize_stock (prize_key, claimed_count, updated_at)
-		 VALUES ($1, GREATEST(0, $2), now())
-		 ON CONFLICT (prize_key) DO UPDATE SET
-		   claimed_count = GREATEST(0, eco_global_prize_stock.claimed_count + $2),
-		   updated_at = now()`,
+		 VALUES ($1, 0, now())
+		 ON CONFLICT (prize_key) DO NOTHING`,
 		prizeKey,
-		delta,
-	)
-	return err
+	); err != nil {
+		return 0, err
+	}
+	var claimed int64
+	if err := tx.QueryRow(ctx,
+		`SELECT claimed_count FROM eco_global_prize_stock WHERE prize_key = $1 FOR UPDATE`,
+		prizeKey,
+	).Scan(&claimed); err != nil {
+		return 0, err
+	}
+	next := maxInt64(0, claimed-refund)
+	granted := minInt64(wanted, maxInt64(0, ecoPrizeDefinitions[prizeKey].GlobalLimit-next))
+	granted = maxInt64(0, granted)
+	next += granted
+	if next != claimed {
+		if _, err := tx.Exec(ctx,
+			`UPDATE eco_global_prize_stock SET claimed_count = $2, updated_at = now() WHERE prize_key = $1`,
+			prizeKey, next,
+		); err != nil {
+			return 0, err
+		}
+	}
+	return granted, nil
 }
 
 func insertVisiblePrize(ctx context.Context, tx pgx.Tx, userID int64, prizeID string, prizeKey string, createdAtMs int64, limited bool) error {

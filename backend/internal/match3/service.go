@@ -22,6 +22,7 @@ import (
 const (
 	GameType               = "match3"
 	timeLimitMillis        = int64(60 * 1000)
+	submitGraceMillis      = int64(15 * 1000)
 	sessionTTLSeconds      = int64(5 * 60)
 	cooldownTTLSeconds     = int64(5)
 	minGameDurationMillis  = int64(10_000)
@@ -208,7 +209,7 @@ func (service *Service) Submit(ctx context.Context, user auth.User, input Submit
 		}
 		now := time.Now()
 		serverDuration := millis(now) - session.StartedAt
-		if millis(now) > session.ExpiresAt {
+		if millis(now) > session.ExpiresAt || serverDuration > timeLimitMillis+submitGraceMillis {
 			if err := deleteSessionAndActive(ctx, tx, user.ID, session.ID); err != nil {
 				return err
 			}

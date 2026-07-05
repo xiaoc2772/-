@@ -205,31 +205,49 @@ func checkAuthRateLimit(ctx context.Context, client *redis.Client, key string, r
 	return rateLimitResult{allowed: true, remaining: remaining, resetAt: resetAt, retryAfter: 0}, nil
 }
 
+// clientIP 解析请求来源 IP，仅用于登录限流。
+// 不信任任何客户端可伪造的单值头（Cf-Connecting-Ip / True-Client-Ip / X-Real-Ip）；
+// 仅当直连对端是内网反向代理（本部署为 Caddy，会把真实来源追加到 X-Forwarded-For 链尾）时
+// 才解析 X-Forwarded-For，从右往左取第一个公网 IP，跳过代理链上的内网地址。
 func clientIP(request *http.Request) string {
-	for _, header := range []string{"Cf-Connecting-Ip", "True-Client-Ip", "X-Real-Ip"} {
-		if ip := normalizeIP(request.Header.Get(header)); ip != "" {
+	remote := remoteAddrIP(request)
+	if remote != "" && isPrivateOrLoopbackIP(remote) {
+		if ip := rightmostPublicForwardedIP(request.Header.Get("X-Forwarded-For")); ip != "" {
 			return ip
 		}
 	}
-	if ip := lastValidForwardedIP(request.Header.Get("X-Forwarded-For")); ip != "" {
-		return ip
+	if remote != "" {
+		return remote
 	}
+	return "unknown"
+}
+
+func remoteAddrIP(request *http.Request) string {
 	host, _, err := net.SplitHostPort(request.RemoteAddr)
 	if err == nil {
 		if ip := normalizeIP(host); ip != "" {
 			return ip
 		}
 	}
-	if ip := normalizeIP(request.RemoteAddr); ip != "" {
-		return ip
-	}
-	return "unknown"
+	return normalizeIP(request.RemoteAddr)
 }
 
-func lastValidForwardedIP(value string) string {
+func isPrivateOrLoopbackIP(value string) bool {
+	ip := net.ParseIP(value)
+	if ip == nil {
+		return false
+	}
+	return ip.IsPrivate() || ip.IsLoopback() || ip.IsLinkLocalUnicast()
+}
+
+func rightmostPublicForwardedIP(value string) string {
 	parts := strings.Split(value, ",")
 	for index := len(parts) - 1; index >= 0; index-- {
-		if ip := normalizeIP(parts[index]); ip != "" {
+		ip := normalizeIP(parts[index])
+		if ip == "" {
+			continue
+		}
+		if !isPrivateOrLoopbackIP(ip) {
 			return ip
 		}
 	}

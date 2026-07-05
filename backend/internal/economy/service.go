@@ -235,9 +235,6 @@ func (service *Service) GetStoreHome(ctx context.Context, user auth.User) (Store
 	if err := ensureUser(ctx, tx, user); err != nil {
 		return StoreHomeData{}, err
 	}
-	if err := ensureDefaultStore(ctx, tx); err != nil {
-		return StoreHomeData{}, err
-	}
 
 	categories, err := listStoreCategories(ctx, tx, false)
 	if err != nil {
@@ -297,9 +294,6 @@ func (service *Service) ExchangeItem(ctx context.Context, user auth.User, input 
 			return err
 		}
 		if err := ensureUser(ctx, tx, user); err != nil {
-			return err
-		}
-		if err := ensureDefaultStore(ctx, tx); err != nil {
 			return err
 		}
 

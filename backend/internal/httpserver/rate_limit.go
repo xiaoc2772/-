@@ -8,6 +8,8 @@ import (
 	"time"
 
 	"redemption/backend/internal/auth"
+
+	"github.com/redis/go-redis/v9"
 )
 
 type userRateLimitRule struct {
@@ -54,6 +56,7 @@ var (
 	numberBombReadRateLimit      = userRateLimitRule{prefix: "ratelimit:lottery:number-bomb:read", windowSeconds: 60, maxRequests: 60}
 	numberBombWriteRateLimit     = userRateLimitRule{prefix: "ratelimit:lottery:number-bomb:write", windowSeconds: 60, maxRequests: 20}
 	rankingsSettleRateLimit      = userRateLimitRule{prefix: "ratelimit:rankings:settle", windowSeconds: 60, maxRequests: 20}
+	raffleJoinRateLimit          = userRateLimitRule{prefix: "ratelimit:welfare:raffle:join", windowSeconds: 60, maxRequests: 20}
 	adminAlertsRateLimit         = userRateLimitRule{prefix: "ratelimit:admin:alerts", windowSeconds: 60, maxRequests: 60}
 	adminRewardsRateLimit        = userRateLimitRule{prefix: "ratelimit:admin:rewards", windowSeconds: 60, maxRequests: 30}
 
@@ -82,21 +85,26 @@ func (handlers economyHandlers) rejectRateLimited(writer http.ResponseWriter, re
 	return true
 }
 
+// INCR 与 EXPIRE 必须原子执行：分两条命令时 EXPIRE 一旦失败，key 永不过期，
+// 用户会被永久限流。TTL < 0 分支同时自愈历史遗留的无过期 key。
+var userRateLimitIncrScript = redis.NewScript(`
+local count = redis.call('INCR', KEYS[1])
+if count == 1 or redis.call('TTL', KEYS[1]) < 0 then
+	redis.call('EXPIRE', KEYS[1], ARGV[1])
+end
+return count
+`)
+
 func (handlers economyHandlers) checkUserRateLimit(ctx context.Context, userID int64, rule userRateLimitRule) rateLimitResult {
 	key := fmt.Sprintf("%s:%d", rule.prefix, userID)
 	if handlers.deps.Redis == nil {
 		return checkUserRateLimitInMemory(key, rule, time.Now())
 	}
 
-	count, err := handlers.deps.Redis.Incr(ctx, key).Result()
+	count, err := userRateLimitIncrScript.Run(ctx, handlers.deps.Redis, []string{key}, rule.windowSeconds).Int64()
 	if err != nil {
 		handlers.deps.Logger.Warn("Redis 限流失败，降级到进程内限流", "key", key, "error", err)
 		return checkUserRateLimitInMemory(key, rule, time.Now())
-	}
-	if count == 1 {
-		if err := handlers.deps.Redis.Expire(ctx, key, time.Duration(rule.windowSeconds)*time.Second).Err(); err != nil {
-			handlers.deps.Logger.Warn("Redis 限流 TTL 设置失败", "key", key, "error", err)
-		}
 	}
 
 	ttl, err := handlers.deps.Redis.TTL(ctx, key).Result()

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"redemption/backend/internal/auth"
 	"redemption/backend/internal/platform/newapi"
@@ -13,6 +14,9 @@ import (
 )
 
 var ErrWalletQuotaClientUnavailable = errors.New("wallet quota client is not configured")
+
+// 必须小于 walletOperationLockTTL，避免收尾还在进行时锁已过期、并发请求闯入。
+const walletOperationFinishTimeout = 55 * time.Second
 
 type WalletQuotaClient interface {
 	GetQuotaBalance(ctx context.Context, userID int64) (newapi.QuotaBalance, error)
@@ -48,6 +52,11 @@ func (service *Service) ExecuteWithdraw(ctx context.Context, user auth.User, poi
 }
 
 func (service *Service) executeWithdrawInner(ctx context.Context, user auth.User, points int64) (WithdrawResult, error) {
+	// 资金操作一旦产生副作用就必须走完补偿与审计收尾：
+	// 剥离请求取消信号，客户端断连不再把交易滞留在 pending/uncertain。
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), walletOperationFinishTimeout)
+	defer cancel()
+
 	preview := PreviewWithdraw(points)
 	if !preview.OK {
 		return WithdrawResult{Success: false, Message: fallbackWalletMessage(preview.Message, "参数无效")}, nil
@@ -226,6 +235,10 @@ func (service *Service) ExecuteTopup(ctx context.Context, user auth.User, dollar
 }
 
 func (service *Service) executeTopupInner(ctx context.Context, user auth.User, dollars float64) (TopupResult, error) {
+	// 同 executeWithdrawInner：断连不得中断额度扣减后的积分入账与状态收尾。
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), walletOperationFinishTimeout)
+	defer cancel()
+
 	preview := PreviewTopup(dollars)
 	if !preview.OK {
 		return TopupResult{Success: false, Message: fallbackWalletMessage(preview.Message, "参数无效")}, nil

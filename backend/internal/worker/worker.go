@@ -8,6 +8,7 @@ import (
 
 	"redemption/backend/internal/config"
 	"redemption/backend/internal/eco"
+	"redemption/backend/internal/economy"
 	"redemption/backend/internal/farm"
 	"redemption/backend/internal/lottery"
 	"redemption/backend/internal/welfare"
@@ -34,8 +35,26 @@ func New(deps Dependencies) *Runner {
 	return &Runner{deps: deps}
 }
 
+// newScheduler 挂载 cron.Recover，任一定时任务 panic 时记录日志并继续运行，
+// 避免单个任务击穿整个 worker（结算、发奖、邮件全停）。
+func newScheduler(logger *slog.Logger) *cron.Cron {
+	return cron.New(cron.WithSeconds(), cron.WithChain(cron.Recover(cronSlogLogger{logger: logger})))
+}
+
+type cronSlogLogger struct {
+	logger *slog.Logger
+}
+
+func (adapter cronSlogLogger) Info(msg string, keysAndValues ...any) {
+	adapter.logger.Info(msg, keysAndValues...)
+}
+
+func (adapter cronSlogLogger) Error(err error, msg string, keysAndValues ...any) {
+	adapter.logger.Error(msg, append([]any{"error", err}, keysAndValues...)...)
+}
+
 func (runner *Runner) Run(ctx context.Context) error {
-	scheduler := cron.New(cron.WithSeconds())
+	scheduler := newScheduler(runner.deps.Logger)
 
 	if _, err := scheduler.AddFunc("0 */10 * * * *", func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -177,6 +196,26 @@ func (runner *Runner) Run(ctx context.Context) error {
 		}
 		if result.Paused > 0 {
 			runner.deps.Logger.Info("自动暂停福利项目完成", "paused", result.Paused)
+		}
+	}); err != nil {
+		return err
+	}
+
+	if _, err := scheduler.AddFunc("0 */5 * * * *", func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+
+		result, err := economy.NewService(runner.deps.DB).ReconcileWalletTransactions(ctx, 10*time.Minute, 100)
+		if err != nil {
+			runner.deps.Logger.Error("钱包交易对账失败", "error", err)
+			return
+		}
+		if result.MarkedUncertain > 0 || result.AlertedUncertain > 0 {
+			runner.deps.Logger.Warn(
+				"钱包交易对账发现待人工核对的交易",
+				"markedUncertain", result.MarkedUncertain,
+				"alertedUncertain", result.AlertedUncertain,
+			)
 		}
 	}); err != nil {
 		return err

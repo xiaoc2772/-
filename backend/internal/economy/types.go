@@ -183,27 +183,6 @@ type ExchangeResult struct {
 	RewardAssetKind string       `json:"rewardAssetKind,omitempty"`
 }
 
-type defaultCategory struct {
-	ID        string
-	Name      string
-	Color     string
-	SortOrder int
-	Enabled   bool
-}
-
-type defaultItem struct {
-	ID          string
-	Name        string
-	Description string
-	Type        string
-	CategoryID  string
-	PointsCost  int64
-	Value       int64
-	DailyLimit  *int64
-	SortOrder   int
-	Enabled     bool
-}
-
 type StoreCategoryMutationInput struct {
 	ID        string
 	Name      string
@@ -240,8 +219,4 @@ type StoreItemUpdateInput struct {
 
 func millis(t time.Time) int64 {
 	return t.UnixNano() / int64(time.Millisecond)
-}
-
-func ptrInt64(value int64) *int64 {
-	return &value
 }

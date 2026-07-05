@@ -21,9 +21,6 @@ func (service *Service) GetStoreAdmin(ctx context.Context) (StoreAdminData, erro
 	}
 	defer rollbackSilently(ctx, tx)
 
-	if err := ensureDefaultStore(ctx, tx); err != nil {
-		return StoreAdminData{}, err
-	}
 	categories, err := listStoreCategories(ctx, tx, true)
 	if err != nil {
 		return StoreAdminData{}, err
@@ -111,9 +108,6 @@ func (service *Service) CreateStoreItem(ctx context.Context, input StoreItemMuta
 	}
 	defer rollbackSilently(ctx, tx)
 
-	if err := ensureDefaultStore(ctx, tx); err != nil {
-		return nil, err
-	}
 	if ok, err := storeCategoryExists(ctx, tx, input.CategoryID); err != nil {
 		return nil, err
 	} else if !ok {

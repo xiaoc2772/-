@@ -16,8 +16,38 @@ func TestRaffleJoinRouteRequiresLogin(t *testing.T) {
 	if response.Code != http.StatusUnauthorized {
 		t.Fatalf("expected 401, got %d body=%s", response.Code, response.Body.String())
 	}
-	if !strings.Contains(response.Body.String(), "请先登录") {
+	if !strings.Contains(response.Body.String(), "未登录") {
 		t.Fatalf("expected login required response, got %s", response.Body.String())
+	}
+}
+
+func TestRaffleJoinRouteRejectsCrossSiteOrigin(t *testing.T) {
+	handler := New(testDependencies())
+
+	request, _ := http.NewRequest(http.MethodPost, "/api/raffle/test-raffle/join", nil)
+	request.Host = "example.com"
+	request.Header.Set("Origin", "https://evil.example")
+	request.AddCookie(testSessionCookieFor(1001, "tester", "Tester"))
+
+	response := performRequest(handler, request)
+	if response.Code != http.StatusForbidden || !strings.Contains(response.Body.String(), "请求来源不合法") {
+		t.Fatalf("expected cross-site join to be rejected, got status=%d body=%s", response.Code, response.Body.String())
+	}
+}
+
+func TestRaffleJoinRouteRateLimit(t *testing.T) {
+	handler := New(testDependencies())
+
+	for index := 0; index < 20; index++ {
+		response := performJSONRequest(handler, http.MethodPost, "/api/raffle/test-raffle/join", "", true)
+		if response.Code == http.StatusTooManyRequests {
+			t.Fatalf("request %d should not be rate limited: body=%s", index+1, response.Body.String())
+		}
+	}
+
+	response := performJSONRequest(handler, http.MethodPost, "/api/raffle/test-raffle/join", "", true)
+	if response.Code != http.StatusTooManyRequests || !strings.Contains(response.Body.String(), "请求过于频繁") {
+		t.Fatalf("expected 429 after rate limit, got status=%d body=%s", response.Code, response.Body.String())
 	}
 }
 

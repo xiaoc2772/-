@@ -148,6 +148,96 @@ func TestMatch3HTTPCompleteGameAndRejectDuplicateSettlement(t *testing.T) {
 	}
 }
 
+func TestMatch3HTTPRejectSubmitBeyondTimeLimit(t *testing.T) {
+	ctx := context.Background()
+	databaseURL := os.Getenv("TEST_DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("TEST_DATABASE_URL 未设置，跳过 PostgreSQL 集成测试")
+	}
+
+	db, err := dbpostgres.Open(ctx, databaseURL)
+	if err != nil {
+		t.Fatalf("open postgres failed: %v", err)
+	}
+	defer db.Close()
+
+	if _, err := pgmigration.NewRunner(db, httpMigrationsDir(t)).Apply(ctx, false); err != nil {
+		t.Fatalf("apply migrations failed: %v", err)
+	}
+
+	userID := int64(42001 + time.Now().UnixNano()%1_000_000_000)
+	cleanupHTTPTestMatch3User(t, ctx, db, userID)
+	defer cleanupHTTPTestMatch3User(t, ctx, db, userID)
+
+	handler := New(Dependencies{
+		Config: config.Config{SessionSecret: testSessionSecret},
+		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+		DB:     db,
+	})
+
+	startResponse := performMatch3JSONRequest(handler, userID, http.MethodPost, "/api/games/match3/start", `{}`)
+	if startResponse.Code != http.StatusOK {
+		t.Fatalf("expected start 200, got %d body=%s", startResponse.Code, startResponse.Body.String())
+	}
+	var startPayload struct {
+		Success bool               `json:"success"`
+		Data    match3.SessionView `json:"data"`
+	}
+	if err := json.NewDecoder(startResponse.Body).Decode(&startPayload); err != nil {
+		t.Fatalf("decode start response failed: %v", err)
+	}
+
+	session := loadMatch3SessionForHTTPTest(t, ctx, db, startPayload.Data.SessionID)
+	session.StartedAt -= 90_000
+	raw, err := json.Marshal(session)
+	if err != nil {
+		t.Fatalf("marshal adjusted session failed: %v", err)
+	}
+	if _, err := db.Exec(ctx,
+		`UPDATE game_sessions SET payload = $1, started_at = $2 WHERE id = $3`,
+		raw,
+		time.UnixMilli(session.StartedAt),
+		session.ID,
+	); err != nil {
+		t.Fatalf("adjust session start time failed: %v", err)
+	}
+
+	move, _ := firstValidMatch3Move(t, session.Seed, session.Config)
+	submitBody, err := json.Marshal(match3.SubmitInput{
+		SessionID: session.ID,
+		Moves:     []match3.Move{move},
+	})
+	if err != nil {
+		t.Fatalf("marshal submit body failed: %v", err)
+	}
+	submitResponse := performMatch3JSONRequest(handler, userID, http.MethodPost, "/api/games/match3/submit", string(submitBody))
+	if submitResponse.Code != http.StatusBadRequest {
+		t.Fatalf("超过 60 秒时限的提交应被拒绝，got %d body=%s", submitResponse.Code, submitResponse.Body.String())
+	}
+
+	var balance int64
+	if err := db.QueryRow(ctx, `SELECT balance FROM point_accounts WHERE user_id = $1`, userID).Scan(&balance); err != nil {
+		t.Fatalf("query balance failed: %v", err)
+	}
+	if balance != 0 {
+		t.Fatalf("超时提交不应发放积分，balance=%d", balance)
+	}
+	var recordCount int64
+	if err := db.QueryRow(ctx, `SELECT count(*) FROM game_records WHERE user_id = $1 AND game_type = 'match3'`, userID).Scan(&recordCount); err != nil {
+		t.Fatalf("query record count failed: %v", err)
+	}
+	if recordCount != 0 {
+		t.Fatalf("超时提交不应生成游戏记录，got %d", recordCount)
+	}
+	var activeCount int64
+	if err := db.QueryRow(ctx, `SELECT count(*) FROM active_game_sessions WHERE user_id = $1 AND game_type = 'match3'`, userID).Scan(&activeCount); err != nil {
+		t.Fatalf("query active session failed: %v", err)
+	}
+	if activeCount != 0 {
+		t.Fatalf("超时会话应被清理，got %d", activeCount)
+	}
+}
+
 func performMatch3JSONRequest(handler http.Handler, userID int64, method string, path string, body string) *httptest.ResponseRecorder {
 	request := httptest.NewRequest(method, path, bytes.NewBufferString(body))
 	request.Host = "example.com"

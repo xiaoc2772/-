@@ -45,8 +45,9 @@ func TestAdminUserRoutesListDetailAndAchievements(t *testing.T) {
 	raffleID := "admin-users-raffle-" + strconv.FormatInt(suffix, 10)
 	entryID := "admin-users-entry-" + strconv.FormatInt(suffix, 10)
 	exchangeID := "admin-users-exchange-" + strconv.FormatInt(suffix, 10)
-	cleanupAdminUsersHTTPTest(t, ctx, db, userID, otherUserID, raffleID)
-	defer cleanupAdminUsersHTTPTest(t, ctx, db, userID, otherUserID, raffleID)
+	projectID := "admin-users-project-" + strconv.FormatInt(suffix, 10)
+	cleanupAdminUsersHTTPTest(t, ctx, db, userID, otherUserID, raffleID, projectID)
+	defer cleanupAdminUsersHTTPTest(t, ctx, db, userID, otherUserID, raffleID, projectID)
 
 	now := time.Now()
 	if _, err := db.Exec(ctx,
@@ -62,11 +63,23 @@ func TestAdminUserRoutesListDetailAndAchievements(t *testing.T) {
 	); err != nil {
 		t.Fatalf("seed users failed: %v", err)
 	}
+	// isNewUser 现仅由领取新人专属项目消耗(7025940),种子领取记录须关联 new_user_only 项目
+	if _, err := db.Exec(ctx,
+		`INSERT INTO projects (
+		   id, name, description, max_claims, claimed_count, codes_count, status,
+		   created_at_ms, created_by, reward_type, direct_points, new_user_only, pinned, pinned_at_ms
+		 ) VALUES ($1, '商城兑换项', '后台用户测试项目', 10, 1, 10, 'active', $2, 'test', 'direct', 100, true, false, NULL)`,
+		projectID,
+		now.UnixMilli(),
+	); err != nil {
+		t.Fatalf("seed project failed: %v", err)
+	}
 	if _, err := db.Exec(ctx,
 		`INSERT INTO exchange_logs (id, user_id, item_id, item_name, points_cost, value, type, quantity, created_at)
-		 VALUES ($1, $2, 'store-item', '商城兑换项', 0, 100, 'project_direct', 1, now())`,
+		 VALUES ($1, $2, $3, '商城兑换项', 0, 100, 'project_direct', 1, now())`,
 		exchangeID,
 		userID,
+		projectID,
 	); err != nil {
 		t.Fatalf("seed exchange log failed: %v", err)
 	}
@@ -248,12 +261,13 @@ func TestAdminUserRoutesListDetailAndAchievements(t *testing.T) {
 	}
 }
 
-func cleanupAdminUsersHTTPTest(t *testing.T, ctx context.Context, db *pgxpool.Pool, userID int64, otherUserID int64, raffleID string) {
+func cleanupAdminUsersHTTPTest(t *testing.T, ctx context.Context, db *pgxpool.Pool, userID int64, otherUserID int64, raffleID string, projectID string) {
 	t.Helper()
 	_, _ = db.Exec(ctx, `DELETE FROM user_achievement_grants WHERE user_id IN ($1, $2)`, userID, otherUserID)
 	_, _ = db.Exec(ctx, `DELETE FROM user_equipped_achievements WHERE user_id IN ($1, $2)`, userID, otherUserID)
 	_, _ = db.Exec(ctx, `DELETE FROM user_forced_achievements WHERE user_id IN ($1, $2)`, userID, otherUserID)
 	_, _ = db.Exec(ctx, `DELETE FROM exchange_logs WHERE user_id IN ($1, $2)`, userID, otherUserID)
+	_, _ = db.Exec(ctx, `DELETE FROM projects WHERE id = $1`, projectID)
 	_, _ = db.Exec(ctx, `DELETE FROM raffle_entries WHERE raffle_id = $1`, raffleID)
 	_, _ = db.Exec(ctx, `DELETE FROM raffles WHERE id = $1`, raffleID)
 	_, _ = db.Exec(ctx, `DELETE FROM point_accounts WHERE user_id IN ($1, $2)`, userID, otherUserID)
