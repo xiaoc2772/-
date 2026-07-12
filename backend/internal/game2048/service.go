@@ -360,6 +360,12 @@ func (service *Service) settledRecordOrFailure(ctx context.Context, tx pgx.Tx, u
 	}
 	if record != nil {
 		if record.Pending {
+			// checkpoint 也会写入 pending 记录；只有明确结束的快照才能恢复结算，
+			// 避免会话过期后把未完成对局当作正式成绩发放积分。
+			if !record.Won && !record.GameOver {
+				*output = SubmitResult{Success: false, Message: message}
+				return nil
+			}
 			finalized, err := service.finalizePendingRecord(ctx, tx, user, *record)
 			if err != nil {
 				return err
