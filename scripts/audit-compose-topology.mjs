@@ -39,9 +39,9 @@ const requiredSnippets = [
   'DATABASE_URL: postgres://app:app@postgres:5432/app?sslmode=disable',
   'REDIS_URL: redis://redis:6379/0',
   'SESSION_SECRET: local-development-session-secret-at-least-32-chars',
-  'ADMIN_USERNAMES: admin',
+  'ADMIN_USERNAMES: ${ADMIN_USERNAMES:-lucky}',
   'INTERNAL_API_SECRET: local-internal-secret',
-  'NEW_API_URL: ""',
+  'NEW_API_URL: ${NEW_API_URL:-https://www.lucky04.dpdns.org}',
   'R2_PUBLIC_URL: ""',
   'FEEDBACK_MEDIA_DIR: /data/feedback-media',
   'RAFFLE_DELIVERY_CRON_SECRET: local-cron-secret',
@@ -77,9 +77,20 @@ const requiredDependencyPairs = [
 ];
 
 function serviceBlock(service) {
-  const pattern = new RegExp(`^  ${service}:\\n([\\s\\S]*?)(?=^  [a-zA-Z0-9_-]+:|^volumes:|\\z)`, 'm');
-  const match = compose.match(pattern);
-  return match ? match[1] : '';
+  const lines = compose.split(/\r?\n/);
+  const start = lines.findIndex((line) => line === `  ${service}:`);
+  if (start === -1) {
+    return '';
+  }
+  const block = [];
+  for (let index = start + 1; index < lines.length; index += 1) {
+    const line = lines[index];
+    if (/^  [a-zA-Z0-9_-]+:/.test(line) || line === 'volumes:') {
+      break;
+    }
+    block.push(line);
+  }
+  return block.join('\n');
 }
 
 const missingFiles = requiredFiles.filter((file) => !existsSync(file));

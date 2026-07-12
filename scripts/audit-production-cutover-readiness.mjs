@@ -68,11 +68,6 @@ function hasValue(key) {
   return value !== '' && !value.startsWith('replace-with-') && !value.startsWith('${');
 }
 
-function fileExistsFromEnv(key) {
-  const value = String(env[key] || '').trim();
-  return value !== '' && existsSync(value);
-}
-
 function runNodeScript(args, extraEnv = {}, timeout = 60000) {
   const result = spawnSync('node', args, {
     encoding: 'utf8',
@@ -220,12 +215,12 @@ const modules = [
 
 if (evidenceFile && evidenceAudit.ok && evidenceAudit.json) {
   const evidenceModules = new Map(
-    (evidenceAudit.json.modules || []).map((module) => [module.name, module]),
+    (evidenceAudit.json.modules || []).map((item) => [item.name, item]),
   );
-  for (const module of modules) {
-    const evidenceModule = evidenceModules.get(module.name);
+  for (const cutoverModule of modules) {
+    const evidenceModule = evidenceModules.get(cutoverModule.name);
     if (!evidenceModule) {
-      module.blockers.push(`证据包缺少 ${module.name} 模块`);
+      cutoverModule.blockers.push(`证据包缺少 ${cutoverModule.name} 模块`);
       continue;
     }
     if (!evidenceModule.ready) {
@@ -233,18 +228,18 @@ if (evidenceFile && evidenceAudit.ok && evidenceAudit.json) {
         ? evidenceModule.blockers
         : ['证据包模块未 ready'];
       for (const blocker of evidenceBlockers) {
-        module.blockers.push(`证据包未满足: ${blocker}`);
+        cutoverModule.blockers.push(`证据包未满足: ${blocker}`);
       }
     }
   }
 }
 
-for (const module of modules) {
-  module.ready = module.blockers.length === 0;
+for (const cutoverModule of modules) {
+  cutoverModule.ready = cutoverModule.blockers.length === 0;
 }
 
-const readyModules = modules.filter((module) => module.ready).map((module) => module.name);
-const blockedModules = modules.filter((module) => !module.ready).map((module) => module.name);
+const readyModules = modules.filter((item) => item.ready).map((item) => item.name);
+const blockedModules = modules.filter((item) => !item.ready).map((item) => item.name);
 
 if (
   missingFiles.length > 0 ||

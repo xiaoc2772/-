@@ -2,6 +2,7 @@
 
 import { useCallback, useRef, useState } from 'react';
 import type { Match3Config, Match3Move } from '@/lib/match3-engine';
+import { fetchGameRequest, gameRequestErrorMessage } from '../../_lib/request';
 
 interface Match3Session {
   sessionId: string;
@@ -50,7 +51,7 @@ export function useGameSession() {
 
   const fetchStatus = useCallback(async () => {
     try {
-      const res = await fetch('/api/games/match3/status');
+      const res = await fetchGameRequest('/api/games/match3/status');
       const data = await res.json();
       if (data.success) {
         setStatus(data.data);
@@ -72,7 +73,7 @@ export function useGameSession() {
     setIsRestored(false);
 
     try {
-      const res = await fetch('/api/games/match3/start', { method: 'POST' });
+      const res = await fetchGameRequest('/api/games/match3/start', { method: 'POST' });
       const data = await res.json();
       if (!data.success) {
         setError(data.message || '开始游戏失败');
@@ -102,7 +103,7 @@ export function useGameSession() {
 
     setLoading(true);
     try {
-      const res = await fetch('/api/games/match3/cancel', { method: 'POST' });
+      const res = await fetchGameRequest('/api/games/match3/cancel', { method: 'POST' });
       const data = await res.json();
       if (data.success) {
         setSession(null);
@@ -129,7 +130,7 @@ export function useGameSession() {
       setLoading(true);
 
       try {
-        const res = await fetch('/api/games/match3/submit', {
+        const res = await fetchGameRequest('/api/games/match3/submit', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ sessionId: session.sessionId, moves }),
@@ -145,9 +146,9 @@ export function useGameSession() {
         // [Perf] 后台非阻塞刷新
         fetchStatus();
         return data.data;
-      } catch {
+      } catch (err) {
         hasSubmittedRef.current = false;
-        setError('网络错误');
+        setError(gameRequestErrorMessage(err, '结算请求超时，请检查网络后重试', '网络错误，请稍后重试'));
         return null;
       } finally {
         setLoading(false);

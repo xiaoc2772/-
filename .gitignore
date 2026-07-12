@@ -1,5 +1,6 @@
 # dependencies
 node_modules
+.npm-cache/
 .pnp
 .pnp.js
 
@@ -81,7 +82,12 @@ next-env.d.ts
 .claude/
 tmp_*.html
 report-*.md
-
 # local artifacts
-.gocache/
+/.gocache/
 backups/
+/backend/.gocache/
+/backend/.gomodcache/
+/.m4-reconcile/
+/.playwright-cli/
+/output/
+/compose.local.yml

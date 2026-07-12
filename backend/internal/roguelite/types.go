@@ -256,6 +256,8 @@ type Record struct {
 	UserID           int64          `json:"userId"`
 	SessionID        string         `json:"sessionId"`
 	GameType         string         `json:"gameType"`
+	Pending          bool           `json:"pending,omitempty"`
+	Finished         bool           `json:"finished,omitempty"`
 	Won              bool           `json:"won"`
 	FinalFloor       int            `json:"finalFloor"`
 	FloorsCleared    int            `json:"floorsCleared"`

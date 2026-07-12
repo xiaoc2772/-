@@ -111,7 +111,7 @@ function parseStatus(output) {
 function parseJSON(body, label) {
   try {
     return JSON.parse(body);
-  } catch (error) {
+  } catch {
     fail(`${label} did not return JSON: ${body.slice(0, 200)}`);
   }
 }

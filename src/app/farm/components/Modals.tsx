@@ -348,7 +348,7 @@ export function PlantModal({ open, plantableCrops, unlockedLandCount, balance, s
               onClick={() => setSelected(c.id)}
             >
               <div className="plant-crop-sprite">
-                <CropSprite cropId={c.id} stage="mature" size={56} />
+                <CropSprite cropId={c.id} stage="mature" size={72} />
               </div>
               <div className="plant-crop-name">{c.name}</div>
               <div className="plant-crop-meta">{c.growthMinutes}分钟 · 收 {c.baseYield}</div>
@@ -667,7 +667,7 @@ function SeedShopList({
         const have = seedInventory[c.id] ?? 0;
         return (
           <div key={c.id} className={`shop-row ${!isUnlocked ? 'shop-row-locked' : ''}`}>
-            <div className="shop-sprite-wrap"><CropSprite cropId={c.id} stage="mature" size={42} /></div>
+            <div className="shop-sprite-wrap"><CropSprite cropId={c.id} stage="mature" size={58} /></div>
             <div className="shop-info">
               <div className="shop-name">
                 {c.name}种子
@@ -744,7 +744,7 @@ function PurchaseQuantityModal({
       <div className="purchase-card">
         <div className="purchase-visual">
           {isSeed ? (
-            <CropSprite cropId={target.cropId} stage="mature" size={54} />
+            <CropSprite cropId={target.cropId} stage="mature" size={72} />
           ) : (
             <span>{target.emoji}</span>
           )}
@@ -1108,7 +1108,7 @@ export function BackpackModal({ open, inventory, seedInventory, scarecrowUntil, 
             const c = CROPS_V2[cropId];
             return (
               <button key={cropId} className="bp-card seed" onClick={() => onSeedClick(cropId)}>
-                <div className="bp-sprite"><CropSprite cropId={cropId} stage="mature" size={48} /></div>
+                <div className="bp-sprite"><CropSprite cropId={cropId} stage="mature" size={64} /></div>
                 <div className="bp-name">{c.name}种子</div>
                 <div className="bp-count">×{count}</div>
               </button>
@@ -1646,7 +1646,7 @@ export function SeedDetailModal({ cropId, seedInventory, currentSeason, onClose 
     >
       <div className="bp-detail">
         <div className="bp-detail-head">
-          <div className="bp-detail-sprite"><CropSprite cropId={cropId} stage="mature" size={72} /></div>
+          <div className="bp-detail-sprite"><CropSprite cropId={cropId} stage="mature" size={88} /></div>
           <div>
             <h4 className="bp-detail-name">{c.name}种子 <span className="bp-detail-count">背包 ×{count}</span></h4>
             <p className="bp-detail-cat">单价 {c.seedCost} 积分</p>
@@ -1864,14 +1864,15 @@ function ModalStyles() {
       }
       .plant-crop-card {
         display: flex; flex-direction: column; align-items: center; gap: 4px;
-        padding: 14px 8px;
+        min-height: 172px;
+        padding: 14px 8px 12px;
         background: #fff; border: 2px solid transparent; border-radius: 16px;
         cursor: pointer; transition: all 0.2s; position: relative;
         box-shadow: 0 4px 12px rgba(15,23,42,0.04);
       }
       .plant-crop-card.selected { border-color: #16a34a; background: rgba(220,252,231,0.55); }
       .plant-crop-card.disabled { opacity: 0.4; cursor: not-allowed; }
-      .plant-crop-sprite { height: 56px; display: flex; align-items: center; justify-content: center; }
+      .plant-crop-sprite { height: 74px; display: flex; align-items: center; justify-content: center; }
       .plant-crop-name { font-size: 14px; font-weight: 800; color: #15803d; }
       .plant-crop-meta { font-size: 11px; color: #64748b; }
       .plant-crop-yield { font-size: 11px; font-weight: 700; color: #d97706; background: rgba(251,191,36,0.16); padding: 1px 7px; border-radius: 6px; }
@@ -1959,9 +1960,9 @@ function ModalStyles() {
         margin-bottom: 14px;
       }
       .purchase-visual {
-        width: 64px; height: 64px; flex-shrink: 0;
+        width: 82px; height: 82px; flex-shrink: 0;
         display: flex; align-items: center; justify-content: center;
-        border-radius: 20px; background: rgba(132,204,22,0.12);
+        border-radius: 22px; background: rgba(132,204,22,0.12);
       }
       .purchase-visual span { font-size: 34px; }
       .purchase-info { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
@@ -2317,7 +2318,8 @@ function ModalStyles() {
       .bp-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
       .bp-card {
         display: flex; flex-direction: column; align-items: center; gap: 4px;
-        padding: 12px 8px; background: #fff;
+        min-height: 134px;
+        padding: 12px 8px 10px; background: #fff;
         border: 2px solid transparent; border-radius: 16px;
         cursor: pointer; transition: all 0.2s; position: relative;
         box-shadow: 0 4px 12px rgba(15,23,42,0.04);
@@ -2325,7 +2327,7 @@ function ModalStyles() {
       .bp-card:hover { transform: translateY(-2px); border-color: #84cc16; box-shadow: 0 8px 18px rgba(132,204,22,0.2); }
       .bp-card.seed { background: linear-gradient(180deg, #f7fee7, #ecfccb); }
       .bp-emoji { font-size: 28px; line-height: 1; padding: 2px 0; }
-      .bp-sprite { height: 50px; display: flex; align-items: center; justify-content: center; }
+      .bp-sprite { height: 66px; display: flex; align-items: center; justify-content: center; }
       .bp-name { font-size: 12px; font-weight: 700; color: #15803d; text-align: center; line-height: 1.3; }
       .bp-count {
         font-size: 11px; font-weight: 800; color: #fff;
@@ -2335,7 +2337,7 @@ function ModalStyles() {
       .bp-detail { display: flex; flex-direction: column; gap: 12px; }
       .bp-detail-head { display: flex; gap: 14px; align-items: center; }
       .bp-detail-emoji { font-size: 50px; line-height: 1; width: 70px; height: 70px; display: flex; align-items: center; justify-content: center; background: linear-gradient(180deg, #f7fee7, #ecfccb); border-radius: 18px; }
-      .bp-detail-sprite { width: 70px; height: 70px; display: flex; align-items: center; justify-content: center; background: linear-gradient(180deg, #f7fee7, #ecfccb); border-radius: 18px; }
+      .bp-detail-sprite { width: 92px; height: 92px; display: flex; align-items: center; justify-content: center; background: linear-gradient(180deg, #f7fee7, #ecfccb); border-radius: 20px; flex-shrink: 0; }
       .bp-detail-name { margin: 0; font-size: 18px; font-weight: 800; color: #15803d; display: flex; align-items: center; gap: 8px; }
       .bp-detail-count { font-size: 12px; padding: 2px 9px; border-radius: 999px; background: rgba(132,204,22,0.18); color: #15803d; font-weight: 800; }
       .bp-detail-cat { margin: 4px 0 0; font-size: 12.5px; color: #64748b; font-weight: 600; }
@@ -2433,7 +2435,7 @@ function ModalStyles() {
 
       /* shop sprite + locked rows */
       .shop-row.shop-row-locked { opacity: 0.55; }
-      .shop-sprite-wrap { width: 50px; flex-shrink: 0; display: flex; align-items: center; justify-content: center; }
+      .shop-sprite-wrap { width: 64px; flex-shrink: 0; display: flex; align-items: center; justify-content: center; }
 
       /* plant crop "have" badge + empty state */
       .plant-crop-have { font-size: 11px; font-weight: 800; color: #15803d; background: rgba(132,204,22,0.14); padding: 1px 7px; border-radius: 6px; }
@@ -2507,14 +2509,14 @@ function ModalStyles() {
         /* 商店 row：图标 + 信息 + 按钮纵向更舒展 */
         .shop-row {
           display: grid;
-          grid-template-columns: 56px minmax(0, 1fr);
+          grid-template-columns: 70px minmax(0, 1fr);
           gap: 12px;
           padding: 12px;
           border-radius: 14px;
         }
         .shop-sprite-wrap {
           grid-row: 1 / 3;
-          width: 56px;
+          width: 70px;
         }
         .shop-actions {
           grid-column: 2;
@@ -2573,11 +2575,11 @@ function ModalStyles() {
         .adopt-tag { font-size: 9.5px; padding: 2px 7px; }
 
         .shop-row {
-          grid-template-columns: 48px minmax(0, 1fr);
+          grid-template-columns: 64px minmax(0, 1fr);
           padding: 10px;
           gap: 10px;
         }
-        .shop-sprite-wrap { width: 48px; }
+        .shop-sprite-wrap { width: 64px; }
         .shop-actions { gap: 6px; }
         .shop-actions button { padding: 7px 10px; font-size: 12px; }
         .shop-tab { font-size: 11px; padding: 6px 8px; min-width: 50px; }

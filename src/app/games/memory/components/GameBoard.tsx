@@ -4,6 +4,7 @@
 
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { Card } from './Card';
+import { usePausedGameClock } from '../../_hooks/usePausedGameClock';
 import type {
   MemoryDifficulty,
   MemoryDifficultyConfig,
@@ -12,8 +13,8 @@ import type {
 } from '@/lib/types/game';
 import { DIFFICULTY_META } from '../lib/constants';
 
-function getRemainingSeconds(startedAt: number, timeLimit: number) {
-  const elapsedSeconds = Math.floor(Math.max(0, Date.now() - startedAt) / 1000);
+function getRemainingSeconds(startedAt: number, timeLimit: number, now = Date.now()) {
+  const elapsedSeconds = Math.floor(Math.max(0, now - startedAt) / 1000);
   return Math.max(0, timeLimit - elapsedSeconds);
 }
 
@@ -39,6 +40,7 @@ interface GameBoardProps {
     progress: number;
   }) => void;
   isRestored?: boolean;
+  paused?: boolean;
 }
 
 export function GameBoard({
@@ -55,6 +57,7 @@ export function GameBoard({
   onGameEnd,
   onStatusChange,
   isRestored = false,
+  paused = false,
 }: GameBoardProps) {
   const [flippedCards, setFlippedCards] = useState<number[]>(
     firstFlippedCard !== null ? [firstFlippedCard] : []
@@ -74,6 +77,7 @@ export function GameBoard({
   const movesRef = useRef<MemoryMove[]>([]);  // 用于 timer 回调中访问最新 moves
 
   const difficultyMeta = DIFFICULTY_META[difficulty];
+  const gameNow = usePausedGameClock(paused, sessionId);
 
   // 同步 movesRef
   useEffect(() => {
@@ -153,14 +157,14 @@ export function GameBoard({
       flipTimeoutRef.current = null;
     }
     
-    const duration = Math.max(0, Date.now() - startTimeRef.current);
+    const duration = Math.max(0, gameNow() - startTimeRef.current);
     onGameEnd(movesRef.current, completed, duration);
-  }, [onGameEnd]);
+  }, [gameNow, onGameEnd]);
 
   // 倒计时
   useEffect(() => {
     const updateTimer = () => {
-      const nextTimeLeft = getRemainingSeconds(startTimeRef.current, config.timeLimit);
+      const nextTimeLeft = getRemainingSeconds(startTimeRef.current, config.timeLimit, gameNow());
       setTimeLeft(nextTimeLeft);
       if (nextTimeLeft <= 0) {
         handleGameEnd(false);
@@ -178,7 +182,7 @@ export function GameBoard({
         timerRef.current = null;
       }
     };
-  }, [config.timeLimit, handleGameEnd]);
+  }, [config.timeLimit, gameNow, handleGameEnd]);
 
   useEffect(() => {
     return () => {
@@ -200,6 +204,7 @@ export function GameBoard({
   const handleCardClick = useCallback(async (index: number) => {
     if (
       isChecking ||
+      paused ||
       endCalledRef.current ||
       flippedCards.includes(index) ||
       matchedSet.has(index) ||
@@ -269,6 +274,7 @@ export function GameBoard({
     }, response.matched ? 300 : 800);
   }, [
     isChecking,
+    paused,
     endCalledRef,
     flippedCards,
     matchedSet,
@@ -303,7 +309,7 @@ export function GameBoard({
             isMatched={matchedSet.has(index)}
             isLoading={pendingCards.has(index)}
             onClick={handleCardClick}
-            disabled={isChecking || hasEnded || pendingCards.size > 0}
+            disabled={paused || isChecking || hasEnded || pendingCards.size > 0}
           />
         ))}
       </div>

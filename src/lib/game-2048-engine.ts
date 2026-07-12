@@ -1,8 +1,8 @@
 export const GAME2048_BOARD_SIZE = 5;
 export const GAME2048_WIN_TILE = 2048;
+export const GAME2048_WIN_SCORE = 20_000;
 export const GAME2048_MAX_MOVES = 8000;
 export const GAME2048_REWARD_DIVISOR = 128;
-export const GAME2048_MAX_POINT_REWARD = 500;
 
 export type Game2048Direction = 'up' | 'down' | 'left' | 'right';
 export type Game2048Grid = number[][];
@@ -28,7 +28,7 @@ export type Game2048Simulation =
   | { ok: false; message: string };
 
 const DIRECTION_SET = new Set<Game2048Direction>(['up', 'down', 'left', 'right']);
-const MAX_TILE_VALUE = 131072;
+const MAX_TILE_VALUE = 1_073_741_824;
 
 function cloneGrid(grid: Game2048Grid): Game2048Grid {
   return grid.map((row) => [...row]);
@@ -94,7 +94,7 @@ export function isValidGame2048Tile(value: unknown): value is number {
   if (value === 0) return true;
   return value >= 2
     && value <= MAX_TILE_VALUE
-    && (value & (value - 1)) === 0;
+    && Number.isInteger(Math.log2(value));
 }
 
 export function isValidGame2048Grid(grid: unknown): grid is Game2048Grid {
@@ -241,6 +241,10 @@ export function isGame2048Over(grid: Game2048Grid): boolean {
   return true;
 }
 
+export function isGame2048WinningScore(score: number): boolean {
+  return Number.isFinite(score) && Math.floor(score) >= GAME2048_WIN_SCORE;
+}
+
 export function simulateGame2048(
   seed: string,
   rawMoves: unknown,
@@ -278,7 +282,7 @@ export function simulateGame2048(
     highestTile,
     movesSubmitted: normalized.moves.length,
     movesApplied,
-    won: highestTile >= GAME2048_WIN_TILE,
+    won: isGame2048WinningScore(score),
     gameOver: isGame2048Over(grid),
   };
 }
@@ -287,19 +291,28 @@ export function calculateGame2048PointReward(score: number, highestTile: number)
   const safeScore = Number.isFinite(score) ? Math.max(0, Math.floor(score)) : 0;
   const safeHighestTile = Number.isFinite(highestTile) ? Math.max(0, Math.floor(highestTile)) : 0;
   const base = Math.floor(safeScore / GAME2048_REWARD_DIVISOR);
+  const milestoneBonus = calculateGame2048MilestoneBonus(safeHighestTile);
 
-  let milestoneBonus = 0;
-  if (safeHighestTile >= 4096) {
-    milestoneBonus = 140;
-  } else if (safeHighestTile >= 2048) {
-    milestoneBonus = 80;
-  } else if (safeHighestTile >= 1024) {
-    milestoneBonus = 35;
-  } else if (safeHighestTile >= 512) {
-    milestoneBonus = 15;
-  } else if (safeHighestTile >= 256) {
-    milestoneBonus = 6;
+  return base + milestoneBonus;
+}
+
+export function calculateGame2048MilestoneBonus(highestTile: number): number {
+  const safeHighestTile = Number.isFinite(highestTile) ? Math.max(0, Math.floor(highestTile)) : 0;
+
+  if (safeHighestTile >= GAME2048_WIN_TILE) {
+    let bonus = 80;
+    let nextStepBonus = 60;
+    const maxTile = Math.min(safeHighestTile, MAX_TILE_VALUE);
+
+    for (let tile = GAME2048_WIN_TILE * 2; tile <= maxTile; tile *= 2) {
+      bonus += nextStepBonus;
+      nextStepBonus += 60;
+    }
+
+    return bonus;
   }
-
-  return Math.min(GAME2048_MAX_POINT_REWARD, base + milestoneBonus);
+  if (safeHighestTile >= 1024) return 35;
+  if (safeHighestTile >= 512) return 15;
+  if (safeHighestTile >= 256) return 6;
+  return 0;
 }

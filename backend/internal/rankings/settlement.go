@@ -235,6 +235,7 @@ func (service *Service) overallGamesLeaderboardByRangeTx(ctx context.Context, tx
 		    WHERE game_type = ANY($1::text[])
 		      AND created_at >= $2
 		      AND created_at < $3
+		      AND COALESCE(payload->>'pending', 'false') <> 'true'
 		    GROUP BY user_id
 		 )
 		 SELECT u.id, u.username, u.display_name, p.display_name, p.avatar_url,

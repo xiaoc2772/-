@@ -86,12 +86,25 @@ func TestCalculatePointReward(t *testing.T) {
 		{score: 127, highestTile: 128, want: 0},
 		{score: 128, highestTile: 128, want: 1},
 		{score: 2048, highestTile: 2048, want: 96},
-		{score: 999999, highestTile: 4096, want: MaxPointReward},
+		{score: 8192, highestTile: 8192, want: 324},
+		{score: 999999, highestTile: 4096, want: 7952},
 	}
 	for _, tc := range cases {
 		if got := CalculatePointReward(tc.score, tc.highestTile); got != tc.want {
 			t.Fatalf("CalculatePointReward(%d, %d)=%d want %d", tc.score, tc.highestTile, got, tc.want)
 		}
+	}
+}
+
+func TestWinScoreThreshold(t *testing.T) {
+	if WinScore != 20000 {
+		t.Fatalf("unexpected win score: got %d want 20000", WinScore)
+	}
+	if IsWinningScore(19999) {
+		t.Fatal("expected score below win line to lose")
+	}
+	if !IsWinningScore(20000) || !IsWinningScore(20001) {
+		t.Fatal("expected score on or above win line to win")
 	}
 }
 
@@ -101,6 +114,9 @@ func TestValidateInput(t *testing.T) {
 	}
 	if IsValidTile(3) {
 		t.Fatal("expected non power-of-two tile to be invalid")
+	}
+	if !IsValidTile(1048576) {
+		t.Fatal("expected high power-of-two tile to be valid")
 	}
 	if _, ok, _ := NormalizeMoves([]Direction{Direction("bad")}, MaxMoves); ok {
 		t.Fatal("expected invalid direction to fail")

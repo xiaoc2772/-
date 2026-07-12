@@ -10,6 +10,7 @@ import { useGameSession } from './hooks/useGameSession';
 import { DifficultySelect } from './components/DifficultySelect';
 import { GameBoard } from './components/GameBoard';
 import { ResultModal } from './components/ResultModal';
+import { CancelConfirmModal } from '../_components/CancelConfirmModal';
 import { DIFFICULTY_META } from './lib/constants';
 import type { MemoryDifficulty, MemoryMove } from '@/lib/types/game';
 
@@ -74,6 +75,7 @@ export default function MemoryGamePage(): React.JSX.Element {
   const [pendingOutcome, setPendingOutcome] = useState<GameOutcome | null>(null);
   const [boardStats, setBoardStats] = useState<BoardStats | null>(null);
   const [showRules, setShowRules] = useState(false);
+  const [showCancelConfirm, setShowCancelConfirm] = useState(false);
 
   useEffect(() => {
     void fetchStatus();
@@ -158,6 +160,11 @@ export default function MemoryGamePage(): React.JSX.Element {
     setPhase('select');
   }, [cancelGame]);
 
+  const confirmCancelGame = useCallback(async () => {
+    await handleCancelGame();
+    setShowCancelConfirm(false);
+  }, [handleCancelGame]);
+
   const phaseLabel = phase === 'playing' ? '记忆指令' : phase === 'outcome' || phase === 'result' ? '本局结算' : '出发准备';
   const tacticalLine = useMemo(() => {
     if (phase === 'playing') return '记住已翻开的符号，用最少步数完成全部配对。';
@@ -222,7 +229,7 @@ export default function MemoryGamePage(): React.JSX.Element {
             </button>
             {session && (
               <button
-                onClick={handleCancelGame}
+                onClick={() => setShowCancelConfirm(true)}
                 disabled={loading}
                 className="memory-action-btn danger"
                 type="button"
@@ -285,6 +292,7 @@ export default function MemoryGamePage(): React.JSX.Element {
                 onGameEnd={handleGameEnd}
                 onStatusChange={setBoardStats}
                 isRestored={isRestored}
+                paused={showCancelConfirm}
               />
             </section>
             <aside className="memory-side-panel">
@@ -318,6 +326,15 @@ export default function MemoryGamePage(): React.JSX.Element {
         )}
 
         {showRules && <MemoryRulesModal onClose={() => setShowRules(false)} />}
+        <CancelConfirmModal
+          open={showCancelConfirm}
+          loading={loading}
+          title="确认放弃记忆翻牌？"
+          description="当前翻牌进度会被取消，本局不会进入结算。"
+          detail="已翻开的卡片、步数和剩余时间都会丢失。"
+          onConfirm={() => void confirmCancelGame()}
+          onClose={() => setShowCancelConfirm(false)}
+        />
       </main>
 
       <style jsx global>{`

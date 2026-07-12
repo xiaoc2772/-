@@ -68,17 +68,25 @@ function cropAnimationClass(stage: CropStageV2, variant: NonNullable<Props['vari
   return 'farm-sprite-sway';
 }
 
+function cropImageFrame(stage: CropStageV2) {
+  if (stage === 'seed') {
+    return { x: -16, y: -16, size: 132 };
+  }
+  return { x: 0, y: 0, size: 100 };
+}
+
 // ===== 各种作物 =====
 function Wheat({ stage, variant }: { stage: CropStageV2; variant: NonNullable<Props['variant']> }) {
   const base = `${FARM_CROP_IMAGE_BASE}/wheat`;
   // 四阶段统一铺满 100×100 viewBox，渲染容器尺寸一致
   const src = cropImageFile(stage, variant); // sprout / growing 共用「小麦苗」
   const wrap = cropAnimationClass(stage, variant);
+  const frame = cropImageFrame(stage);
   const img = (
     <image
       href={`${base}/${src}`}
-      x="0" y="0"
-      width="100" height="100"
+      x={frame.x} y={frame.y}
+      width={frame.size} height={frame.size}
       preserveAspectRatio="xMidYMax meet"
     />
   );
@@ -89,11 +97,12 @@ function Carrot({ stage, variant }: { stage: CropStageV2; variant: NonNullable<P
   const base = `${FARM_CROP_IMAGE_BASE}/carrot`;
   const src = cropImageFile(stage, variant);
   const wrap = cropAnimationClass(stage, variant);
+  const frame = cropImageFrame(stage);
   const img = (
     <image
       href={`${base}/${src}`}
-      x="0" y="0"
-      width="100" height="100"
+      x={frame.x} y={frame.y}
+      width={frame.size} height={frame.size}
       preserveAspectRatio="xMidYMax meet"
     />
   );
@@ -127,11 +136,12 @@ function Pumpkin({ stage, variant }: { stage: CropStageV2; variant: NonNullable<
 function CropImage({ base, stage, variant }: { base: string; stage: CropStageV2; variant: NonNullable<Props['variant']> }) {
   const src = cropImageFile(stage, variant);
   const wrap = cropAnimationClass(stage, variant);
+  const frame = cropImageFrame(stage);
   const img = (
     <image
       href={`${base}/${src}`}
-      x="0" y="0"
-      width="100" height="100"
+      x={frame.x} y={frame.y}
+      width={frame.size} height={frame.size}
       preserveAspectRatio="xMidYMax meet"
     />
   );

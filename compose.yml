@@ -24,7 +24,7 @@ services:
       NODE_ENV: production
       NEXT_PUBLIC_BASE_URL: http://localhost:8080
       SESSION_SECRET: local-development-session-secret-at-least-32-chars
-      ADMIN_USERNAMES: admin
+      ADMIN_USERNAMES: ${ADMIN_USERNAMES:-lucky}
     expose:
       - "3000"
     depends_on:
@@ -40,9 +40,9 @@ services:
       DATABASE_URL: postgres://app:app@postgres:5432/app?sslmode=disable
       REDIS_URL: redis://redis:6379/0
       SESSION_SECRET: local-development-session-secret-at-least-32-chars
-      ADMIN_USERNAMES: admin
+      ADMIN_USERNAMES: ${ADMIN_USERNAMES:-lucky}
       INTERNAL_API_SECRET: local-internal-secret
-      NEW_API_URL: ""
+      NEW_API_URL: ${NEW_API_URL:-https://www.lucky04.dpdns.org}
       R2_PUBLIC_URL: ""
       FEEDBACK_MEDIA_DIR: /data/feedback-media
     expose:

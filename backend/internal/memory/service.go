@@ -342,8 +342,7 @@ func (service *Service) Submit(ctx context.Context, user auth.User, input Submit
 			return err
 		}
 		if session == nil {
-			output = SubmitResult{Success: false, Message: "游戏会话不存在或已过期"}
-			return nil
+			return service.settledRecordOrFailure(ctx, tx, user.ID, input.SessionID, "游戏会话不存在或已过期", &output)
 		}
 		if session.UserID != user.ID {
 			output = SubmitResult{Success: false, Message: "会话不属于该用户"}
@@ -352,12 +351,10 @@ func (service *Service) Submit(ctx context.Context, user auth.User, input Submit
 		if ok, err := isCurrentActiveSession(ctx, tx, user.ID, session.ID); err != nil {
 			return err
 		} else if !ok {
-			output = SubmitResult{Success: false, Message: "游戏会话已不是当前活跃局"}
-			return nil
+			return service.settledRecordOrFailure(ctx, tx, user.ID, session.ID, "游戏会话已不是当前活跃局", &output)
 		}
 		if session.Status != "playing" {
-			output = SubmitResult{Success: false, Message: "游戏会话已结束"}
-			return nil
+			return service.settledRecordOrFailure(ctx, tx, user.ID, session.ID, "游戏会话已结束", &output)
 		}
 		now := time.Now()
 		serverDuration := millis(now) - session.StartedAt
@@ -365,8 +362,7 @@ func (service *Service) Submit(ctx context.Context, user auth.User, input Submit
 			if err := deleteSessionAndActive(ctx, tx, user.ID, session.ID); err != nil {
 				return err
 			}
-			output = SubmitResult{Success: false, Message: "游戏会话已过期"}
-			return nil
+			return service.settledRecordOrFailure(ctx, tx, user.ID, session.ID, "游戏会话已过期", &output)
 		}
 		config := DifficultyConfigs[session.Difficulty]
 		timedOut := serverDuration > config.TimeLimit*1000
@@ -435,6 +431,21 @@ func (service *Service) Submit(ctx context.Context, user auth.User, input Submit
 		return nil
 	})
 	return output, err
+}
+
+// settledRecordOrFailure 让结算请求具备幂等性：服务端已完成结算但响应丢失时，
+// 客户端使用同一会话重试会拿到原结算记录，不会重复发放积分。
+func (service *Service) settledRecordOrFailure(ctx context.Context, tx pgx.Tx, userID int64, sessionID string, message string, output *SubmitResult) error {
+	record, err := findSettledRecord(ctx, tx, userID, sessionID)
+	if err != nil {
+		return err
+	}
+	if record != nil {
+		*output = SubmitResult{Success: true, Record: record, PointsEarned: record.PointsEarned}
+		return nil
+	}
+	*output = SubmitResult{Success: false, Message: message}
+	return nil
 }
 
 func BuildSessionView(session Session) SessionView {
@@ -806,6 +817,29 @@ func insertRecord(ctx context.Context, tx pgx.Tx, record Record) error {
 		record.ID, record.UserID, record.SessionID, record.GameType, string(record.Difficulty), record.Score, record.PointsEarned, raw, time.UnixMilli(record.CreatedAt),
 	)
 	return err
+}
+
+func findSettledRecord(ctx context.Context, tx pgx.Tx, userID int64, sessionID string) (*Record, error) {
+	var raw []byte
+	err := tx.QueryRow(ctx,
+		`SELECT payload
+		 FROM game_records
+		 WHERE user_id = $1 AND game_type = $2 AND session_id = $3
+		 ORDER BY created_at DESC, id DESC
+		 LIMIT 1`,
+		userID, GameType, sessionID,
+	).Scan(&raw)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	var record Record
+	if err := json.Unmarshal(raw, &record); err != nil {
+		return nil, err
+	}
+	return &record, nil
 }
 
 func validateResult(session Session, input SubmitInput, effectiveCompleted bool, ignoreCompletedMismatch bool) (bool, string) {

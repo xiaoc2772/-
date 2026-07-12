@@ -8,6 +8,8 @@ import { useRouter } from 'next/navigation';
 import { ArrowLeft, BookOpen, Clock3, Gem, Grid3x3, HeartCrack, Layers, Loader2, MousePointer2, RotateCcw, Sparkles, Trophy, X, Zap } from 'lucide-react';
 import { Board } from './components/Board';
 import { useGameSession } from './hooks/useGameSession';
+import { CancelConfirmModal } from '../_components/CancelConfirmModal';
+import { usePausedGameClock } from '../_hooks/usePausedGameClock';
 import { createInitialBoard, MATCH3_WIN_SCORE, simulateMatch3Game } from '@/lib/match3-engine';
 import type { Match3Move } from '@/lib/match3-engine';
 import { cn } from '@/lib/utils';
@@ -147,6 +149,7 @@ export default function Match3Page() {
   } | null>(null);
   const [pendingOutcome, setPendingOutcome] = useState<Match3Outcome | null>(null);
   const [showRules, setShowRules] = useState(false);
+  const [showCancelConfirm, setShowCancelConfirm] = useState(false);
 
   // Animation states
   const displayScore = useAnimatedNumber(score);
@@ -155,6 +158,7 @@ export default function Match3Page() {
 
   const movesRef = useRef<Match3Move[]>([]);
   const finishedRef = useRef(false);
+  const gameNow = usePausedGameClock(showCancelConfirm, session?.sessionId);
 
   useEffect(() => {
     movesRef.current = moves;
@@ -275,7 +279,7 @@ export default function Match3Page() {
     if (phase !== 'playing' || !session) return;
 
     const tick = () => {
-      const left = Math.max(0, session.timeLimitMs - (Date.now() - session.startedAt));
+      const left = Math.max(0, session.timeLimitMs - (gameNow() - session.startedAt));
       setTimeLeftMs(left);
       if (left <= 0 && !finishedRef.current) {
         finishedRef.current = true;
@@ -299,7 +303,7 @@ export default function Match3Page() {
     tick();
     const id = window.setInterval(tick, 200);
     return () => window.clearInterval(id);
-  }, [phase, session, setError]);
+  }, [gameNow, phase, session, setError]);
 
   const timeLeftSec = useMemo(() => Math.ceil(timeLeftMs / 1000), [timeLeftMs]);
 
@@ -320,6 +324,7 @@ export default function Match3Page() {
     (index: number) => {
       if (phase !== 'playing' || !session) return;
       if (loading) return;
+      if (showCancelConfirm) return;
       if (timeLeftMs <= 0) return;
 
       if (selectedIndex === null) {
@@ -365,7 +370,7 @@ export default function Match3Page() {
       saveMoves(session.sessionId, nextMoves);
       setSelectedIndex(null);
     },
-    [computeStateFromMoves, loading, phase, selectedIndex, session, setError, timeLeftMs]
+    [computeStateFromMoves, loading, phase, selectedIndex, session, setError, showCancelConfirm, timeLeftMs]
   );
 
   const handleCancel = useCallback(async () => {
@@ -380,6 +385,11 @@ export default function Match3Page() {
     setPendingOutcome(null);
     setPhase('ready');
   }, [cancelGame, session]);
+
+  const confirmCancelGame = useCallback(async () => {
+    await handleCancel();
+    setShowCancelConfirm(false);
+  }, [handleCancel]);
 
   const handleSettleOutcome = useCallback(async () => {
     if (!session || !pendingOutcome) return;
@@ -480,7 +490,7 @@ export default function Match3Page() {
             </button>
             {session && phase === 'playing' && (
               <button
-                onClick={handleCancel}
+                onClick={() => setShowCancelConfirm(true)}
                 disabled={loading}
                 className="match3-action-btn danger"
                 type="button"
@@ -957,7 +967,7 @@ export default function Match3Page() {
               config={session.config}
               selectedIndex={selectedIndex}
               onTileClick={handleTileClick}
-              disabled={loading || timeLeftMs <= 0}
+              disabled={showCancelConfirm || loading || timeLeftMs <= 0}
             />
 
             {isRestored && (
@@ -1040,6 +1050,15 @@ export default function Match3Page() {
       )}
 
       {showRules && <Match3RulesModal onClose={() => setShowRules(false)} />}
+      <CancelConfirmModal
+        open={showCancelConfirm}
+        loading={loading}
+        title="确认放弃消消乐？"
+        description="当前消除进度会被取消，本局不会进入结算。"
+        detail="已产生的连锁、得分和剩余时间都会丢失。"
+        onConfirm={() => void confirmCancelGame()}
+        onClose={() => setShowCancelConfirm(false)}
+      />
       </main>
     </div>
   );

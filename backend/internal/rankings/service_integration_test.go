@@ -76,8 +76,26 @@ func TestServiceReadOnlyLeaderboardsUsePostgres(t *testing.T) {
 	if games.Period != PeriodDaily || len(games.Overall) < 2 || len(games.Games) == 0 {
 		t.Fatalf("unexpected games leaderboard: %+v", games)
 	}
-	if games.Overall[0].UserID != userA || games.Overall[0].TotalScore != 900000000400 {
+	if games.Overall[0].UserID != userA || games.Overall[0].TotalScore != 900000000480 {
 		t.Fatalf("unexpected overall winner: %+v", games.Overall[0])
+	}
+	luckyTD, ok := findGameRanking(games.Games, "lucky_td")
+	if !ok {
+		t.Fatalf("lucky_td leaderboard missing: %+v", games.Games)
+	}
+	if len(luckyTD.DifficultyOptions) != 7 || luckyTD.DifficultyOptions[0] != (GameDifficultyOption{Value: "all", Label: "全部地图"}) {
+		t.Fatalf("unexpected lucky_td map options: %+v", luckyTD.DifficultyOptions)
+	}
+	trainingRows := luckyTD.LeaderboardsByDifficulty["training_field"]
+	if len(trainingRows) != 1 || trainingRows[0].UserID != userA || trainingRows[0].BestScore != 80 {
+		t.Fatalf("pending or cross-map lucky_td record leaked into training leaderboard: %+v", trainingRows)
+	}
+	frostfireRows := luckyTD.LeaderboardsByDifficulty["frostfire_fault"]
+	if len(frostfireRows) != 1 || frostfireRows[0].UserID != userB || frostfireRows[0].BestScore != 90 {
+		t.Fatalf("unexpected frostfire lucky_td leaderboard: %+v", frostfireRows)
+	}
+	if len(luckyTD.Leaderboard) != 2 || luckyTD.Leaderboard[0].UserID != userB {
+		t.Fatalf("unexpected all-map lucky_td leaderboard: %+v", luckyTD.Leaderboard)
 	}
 
 	peaks, err := service.MonthlyPeakHistory(ctx, 2, 10)
@@ -230,6 +248,9 @@ func seedRankingsData(t *testing.T, ctx context.Context, db *pgxpool.Pool, userA
 	insertRankingGameRecord(t, ctx, db, userA, "memory", "easy", 900000000300, 30, now.Add(-1*time.Hour))
 	insertRankingGameRecord(t, ctx, db, userA, "match3", "", 100, 10, now.Add(-50*time.Minute))
 	insertRankingGameRecord(t, ctx, db, userB, "memory", "easy", 250, 25, now.Add(-40*time.Minute))
+	insertRankingGameRecord(t, ctx, db, userA, "lucky_td", "training_field", 80, 8, now.Add(-35*time.Minute))
+	insertRankingGameRecord(t, ctx, db, userB, "lucky_td", "frostfire_fault", 90, 9, now.Add(-30*time.Minute))
+	insertPendingRankingGameRecord(t, ctx, db, userB, "lucky_td", "training_field", 999999999999, now.Add(-25*time.Minute))
 }
 
 func seedRankingSettlement(t *testing.T, ctx context.Context, db *pgxpool.Pool, userID int64) {
@@ -274,6 +295,15 @@ func findCheckinEntry(entries []CheckinEntry, userID int64) (CheckinEntry, bool)
 		}
 	}
 	return CheckinEntry{}, false
+}
+
+func findGameRanking(games []GameResult, gameType string) (GameResult, bool) {
+	for _, game := range games {
+		if game.GameType == gameType {
+			return game, true
+		}
+	}
+	return GameResult{}, false
 }
 
 func seedRankingUser(t *testing.T, ctx context.Context, db *pgxpool.Pool, userID int64, username string, displayName string) {
@@ -340,6 +370,22 @@ func insertRankingGameRecord(t *testing.T, ctx context.Context, db *pgxpool.Pool
 		createdAt,
 	); err != nil {
 		t.Fatalf("insert game record failed: %v", err)
+	}
+}
+
+func insertPendingRankingGameRecord(t *testing.T, ctx context.Context, db *pgxpool.Pool, userID int64, gameType string, difficulty string, score int64, createdAt time.Time) {
+	t.Helper()
+	if _, err := db.Exec(ctx,
+		`INSERT INTO game_records (id, user_id, session_id, game_type, difficulty, score, points_earned, payload, created_at)
+		 VALUES ($1, $2, $1, $3, $4, $5, 0, '{"pending":true}'::jsonb, $6)`,
+		fmt.Sprintf("rankings_pending_%d_%s_%d", userID, gameType, score),
+		userID,
+		gameType,
+		difficulty,
+		score,
+		createdAt,
+	); err != nil {
+		t.Fatalf("insert pending game record failed: %v", err)
 	}
 }
 

@@ -45,6 +45,7 @@ func New(deps Dependencies) http.Handler {
 	linkgameHandlers := newLinkgameHandlers(deps)
 	rogueliteHandlers := newRogueliteHandlers(deps)
 	game2048Handlers := newGame2048Handlers(deps)
+	luckyTdHandlers := newLuckyTdHandlers(deps)
 	farmHandlers := newFarmHandlers(deps)
 	cardHandlers := newCardHandlers(deps)
 	adminCardHandlers := newAdminCardHandlers(deps)
@@ -275,6 +276,15 @@ func New(deps Dependencies) http.Handler {
 			game2048Router.Post("/cancel", game2048Handlers.cancel)
 			game2048Router.HandleFunc("/*", notMigratedHandler("game_2048"))
 			game2048Router.HandleFunc("/", notMigratedHandler("game_2048"))
+		})
+		api.Route("/games/lucky-td", func(luckyTdRouter chi.Router) {
+			luckyTdRouter.Get("/status", luckyTdHandlers.status)
+			luckyTdRouter.Post("/start", luckyTdHandlers.start)
+			luckyTdRouter.Post("/checkpoint", luckyTdHandlers.checkpoint)
+			luckyTdRouter.Post("/submit", luckyTdHandlers.submit)
+			luckyTdRouter.Post("/cancel", luckyTdHandlers.cancel)
+			luckyTdRouter.HandleFunc("/*", notMigratedHandler("lucky_td"))
+			luckyTdRouter.HandleFunc("/", notMigratedHandler("lucky_td"))
 		})
 	})
 

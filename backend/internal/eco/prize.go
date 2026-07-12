@@ -11,8 +11,9 @@ import (
 )
 
 const (
-	theftCheckIntervalMS      = int64(30 * 60 * 1000)
+	theftCheckIntervalMS      = int64(20 * 60 * 1000)
 	theftBlackMarketDelayMS   = int64(24 * 60 * 60 * 1000)
+	theftProtectionMS         = int64(10 * 60 * 60 * 1000)
 	ecoUserAdvisoryLockOffset = int64(7_000_000_000_000)
 )
 
@@ -182,7 +183,7 @@ func (service *Service) StealPublicPrize(ctx context.Context, input StealPublicP
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 
-	target, ok, err := findPublicPrizeForSteal(ctx, tx, input.EntryID)
+	target, ok, err := findPublicPrizeForSteal(ctx, tx, input.EntryID, input.NowMs)
 	if err != nil {
 		return StealPublicPrizeResult{}, err
 	}
@@ -729,15 +730,25 @@ type stealPublicPrizeTarget struct {
 	OwnerLotID  string
 }
 
-func findPublicPrizeForSteal(ctx context.Context, tx pgx.Tx, entryID string) (stealPublicPrizeTarget, bool, error) {
+func findPublicPrizeForSteal(ctx context.Context, tx pgx.Tx, entryID string, nowMs int64) (stealPublicPrizeTarget, bool, error) {
 	var target stealPublicPrizeTarget
 	err := tx.QueryRow(ctx,
 		`SELECT id, prize_key, owner_user_id, owner_lot_id
 		   FROM eco_public_prizes
 		  WHERE id = $1
 		    AND status = 'listed'
+		    AND NOT EXISTS (
+		      SELECT 1
+		        FROM eco_thefts t
+		       WHERE t.public_entry_id = eco_public_prizes.id
+		         AND t.outcome = 'caught'
+		         AND t.resolved_at_ms IS NOT NULL
+		         AND t.resolved_at_ms + $2 > $3
+		    )
 		  FOR UPDATE`,
 		entryID,
+		theftProtectionMS,
+		nowMs,
 	).Scan(&target.ID, &target.PrizeKey, &target.OwnerUserID, &target.OwnerLotID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return stealPublicPrizeTarget{}, false, nil

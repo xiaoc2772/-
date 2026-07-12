@@ -4,6 +4,9 @@ import Image from 'next/image';
 import Link from 'next/link';
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import { ArrowLeft, BookOpen, Bomb, Hammer, Loader2, Play, RotateCcw, Sparkles, Target, Timer, Trophy, X, Zap } from 'lucide-react';
+import { CancelConfirmModal } from '../_components/CancelConfirmModal';
+import { usePausedGameClock } from '../_hooks/usePausedGameClock';
+import { fetchGameRequest, gameRequestErrorMessage } from '../_lib/request';
 import {
   WHACK_MOLE_GAME_DURATION_MS,
   WHACK_MOLE_DIFFICULTIES,
@@ -264,6 +267,7 @@ export default function WhackMolePage() {
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<WhackMoleRecord | null>(null);
   const [showRules, setShowRules] = useState(false);
+  const [showCancelConfirm, setShowCancelConfirm] = useState(false);
   const [hitFeedback, setHitFeedback] = useState<Partial<Record<number, FeedbackState>>>({});
 
   const submittedRef = useRef(false);
@@ -276,6 +280,7 @@ export default function WhackMolePage() {
   const localScoreRef = useRef(0);
   const localComboRef = useRef(0);
   const feedbackTimersRef = useRef<Partial<Record<number, number>>>({});
+  const gameNow = usePausedGameClock(showCancelConfirm, session?.sessionId);
 
   const setRoundPhase = useCallback((nextPhase: GamePhase) => {
     phaseRef.current = nextPhase;
@@ -376,7 +381,7 @@ export default function WhackMolePage() {
 
   const fetchStatus = useCallback(async () => {
     try {
-      const res = await fetch('/api/games/whack-mole/status');
+      const res = await fetchGameRequest('/api/games/whack-mole/status');
       const data = await parseJson<WhackMoleStatus>(res);
       if (!res.ok || !data?.success || !data.data) {
         throw new Error(data?.message ?? (res.status === 401 ? '请先登录后开始游戏' : '加载游戏状态失败'));
@@ -403,7 +408,7 @@ export default function WhackMolePage() {
     setError(null);
 
     try {
-      const res = await fetch('/api/games/whack-mole/submit', {
+      const res = await fetchGameRequest('/api/games/whack-mole/submit', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -438,7 +443,7 @@ export default function WhackMolePage() {
       submittedRef.current = false;
       setRoundPhase('finished');
       setLastHit('结算未完成，请重试本局结算');
-      setError(err instanceof Error ? err.message : '结算失败，请稍后重试');
+      setError(gameRequestErrorMessage(err, '结算请求超时，请检查网络后重试', '结算失败，请稍后重试'));
     } finally {
       setLoading(false);
     }
@@ -482,7 +487,7 @@ export default function WhackMolePage() {
     if (phase !== 'playing' || !session) return;
 
     let previousTick = getWhackMoleTickIndex(
-      Math.min(Date.now() - session.startedAt, session.durationMs - 1),
+      Math.min(gameNow() - session.startedAt, session.durationMs - 1),
       session.difficulty,
     );
 
@@ -490,7 +495,7 @@ export default function WhackMolePage() {
       const activeSession = sessionRef.current;
       if (!activeSession) return;
 
-      const elapsedMs = Date.now() - activeSession.startedAt;
+      const elapsedMs = gameNow() - activeSession.startedAt;
       const nextTimeLeft = Math.max(0, activeSession.durationMs - elapsedMs);
       setTimeLeftMs(nextTimeLeft);
 
@@ -510,7 +515,7 @@ export default function WhackMolePage() {
     }, TIMER_TICK_MS);
 
     return () => window.clearInterval(timer);
-  }, [clearHitFeedback, phase, session, setBoardForElapsed, submitResult]);
+  }, [clearHitFeedback, gameNow, phase, session, setBoardForElapsed, submitResult]);
 
   const startGame = useCallback(async (restart = false) => {
     setLoading(true);
@@ -520,7 +525,7 @@ export default function WhackMolePage() {
     resetRoundView(selectedDifficulty);
 
     try {
-      const res = await fetch('/api/games/whack-mole/start', {
+      const res = await fetchGameRequest('/api/games/whack-mole/start', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ restart, difficulty: selectedDifficulty }),
@@ -543,7 +548,7 @@ export default function WhackMolePage() {
     setError(null);
 
     try {
-      const res = await fetch('/api/games/whack-mole/cancel', { method: 'POST' });
+      const res = await fetchGameRequest('/api/games/whack-mole/cancel', { method: 'POST' });
       const data = await parseJson<unknown>(res);
       if (!res.ok || !data?.success) {
         throw new Error(data?.message ?? '结束游戏失败');
@@ -571,11 +576,17 @@ export default function WhackMolePage() {
     }
   }, [fetchStatus, resetRoundView, setRoundPhase]);
 
+  const confirmCancelGame = useCallback(async () => {
+    await cancelGame();
+    setShowCancelConfirm(false);
+  }, [cancelGame]);
+
   const handleHolePress = useCallback((index: number) => {
     const activeSession = sessionRef.current;
     if (phaseRef.current !== 'playing' || !activeSession) return;
+    if (showCancelConfirm) return;
 
-    const elapsedMs = Math.max(0, Math.floor(Date.now() - activeSession.startedAt));
+    const elapsedMs = Math.max(0, Math.floor(gameNow() - activeSession.startedAt));
     if (elapsedMs >= activeSession.durationMs) return;
 
     const currentTick = boardTickRef.current;
@@ -598,7 +609,7 @@ export default function WhackMolePage() {
     savePersistedEvents(activeSession.sessionId, eventsRef.current);
 
     setLastHit(getHitMessage(projected.result, projected.scoreDelta, nextCombo));
-  }, [showHoleFeedback, updateLocalProgress]);
+  }, [gameNow, showCancelConfirm, showHoleFeedback, updateLocalProgress]);
 
   const activeDifficulty = session?.difficulty ?? selectedDifficulty;
   const activeConfig = getWhackMoleDifficultyConfig(activeDifficulty);
@@ -778,7 +789,7 @@ export default function WhackMolePage() {
             <button
               onClick={() => {
                 if (phase === 'playing') {
-                  void cancelGame();
+                  setShowCancelConfirm(true);
                   return;
                 }
                 if (canRetrySettlement && sessionRef.current) {
@@ -859,6 +870,7 @@ export default function WhackMolePage() {
                         handleHolePress(index);
                       }
                     }}
+                    disabled={showCancelConfirm || phase !== 'playing'}
                     aria-label={`${index + 1} 号洞 ${getHoleLabel(displayState)}`}
                     className="whack-hole group relative touch-none select-none overflow-hidden rounded-xl border border-emerald-200/70 bg-cover bg-center shadow-inner transition-transform hover:-translate-y-0.5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500 focus-visible:ring-offset-2 sm:rounded-2xl"
                     style={{ backgroundImage: `url(${HOLE_BACKGROUND_IMAGE_SRC})` }}
@@ -883,7 +895,8 @@ export default function WhackMolePage() {
                             alt=""
                             fill
                             sizes="(max-width: 640px) 18vw, 120px"
-                            priority={index < 4 && phase === 'playing'}
+                            loading="eager"
+                            decoding="async"
                             className="object-contain drop-shadow-lg"
                           />
                         )}
@@ -893,7 +906,8 @@ export default function WhackMolePage() {
                             alt=""
                             fill
                             sizes="(max-width: 640px) 18vw, 120px"
-                            priority={index < 4 && phase === 'playing'}
+                            loading="eager"
+                            decoding="async"
                             className="object-contain drop-shadow-lg"
                           />
                         )}
@@ -922,6 +936,15 @@ export default function WhackMolePage() {
             onStart={() => void startGame()}
           />
         )}
+        <CancelConfirmModal
+          open={showCancelConfirm}
+          loading={loading}
+          title="确认放弃打地鼠？"
+          description="当前挑战会被取消，本局不会进入结算。"
+          detail="本局命中、连击、得分和临时事件都会丢失。"
+          onConfirm={() => void confirmCancelGame()}
+          onClose={() => setShowCancelConfirm(false)}
+        />
       </main>
 
       <style jsx>{`

@@ -15,6 +15,7 @@ import {
   Loader2,
   Recycle,
   RefreshCw,
+  Shield,
   Sparkles,
   Star,
   Trophy,
@@ -28,7 +29,7 @@ type SimplePeriod = 'all' | 'monthly';
 type LotteryPeriod = 'daily' | 'weekly' | 'monthly';
 type EcoPeriod = 'daily' | 'weekly' | 'monthly';
 
-type SupportedGame = 'linkgame' | 'match3' | 'memory' | 'whack_mole' | 'roguelite' | 'minesweeper' | 'game_2048';
+type SupportedGame = 'linkgame' | 'match3' | 'memory' | 'whack_mole' | 'roguelite' | 'minesweeper' | 'game_2048' | 'lucky_td';
 
 interface GameOverallEntry {
   rank: number;
@@ -189,6 +190,7 @@ const GAME_LABEL: Record<SupportedGame, string> = {
   roguelite: '星尘迷阵',
   minesweeper: '扫雷',
   game_2048: '2048',
+  lucky_td: '幸运塔防',
 };
 
 const GAME_CAPTION: Record<SupportedGame, string> = {
@@ -199,6 +201,7 @@ const GAME_CAPTION: Record<SupportedGame, string> = {
   roguelite: 'STARDUST ROGUE',
   minesweeper: 'MINESWEEPER',
   game_2048: '2048',
+  lucky_td: 'LUCKY TOWER DEFENSE',
 };
 
 const GAME_THEME: Record<SupportedGame, string> = {
@@ -209,6 +212,7 @@ const GAME_THEME: Record<SupportedGame, string> = {
   roguelite: 't-roguelite',
   minesweeper: 't-mines',
   game_2048: 't-2048',
+  lucky_td: 't-lucky-td',
 };
 
 const GAME_METRIC_LABEL: Record<SupportedGame, string> = {
@@ -219,6 +223,7 @@ const GAME_METRIC_LABEL: Record<SupportedGame, string> = {
   roguelite: '最佳单局',
   minesweeper: '最佳单局',
   game_2048: '最佳单局',
+  lucky_td: '最佳单局',
 };
 
 const GAME_UNIT: Record<SupportedGame, string> = {
@@ -229,6 +234,7 @@ const GAME_UNIT: Record<SupportedGame, string> = {
   roguelite: '分',
   minesweeper: '分',
   game_2048: '分',
+  lucky_td: '分',
 };
 
 const AVATAR_VARIANT_COUNT = 5;
@@ -477,12 +483,12 @@ const RANKING_RULES = [
     tag: '各游戏独立排名',
     tone: 'pink',
     summary:
-      '为每款游戏单独维护一份排行榜，按所选周期内的最好单局成绩排序；有难度的游戏可在卡片右上角切换难度。',
+      '为每款游戏单独维护一份排行榜，按所选周期内的最好单局成绩排序；有难度或地图分类的游戏可在卡片右上角切换。',
     sections: [
       {
         label: '收录游戏',
         items: [
-          '当前收录：连连看、消消乐、记忆翻牌、打地鼠、星尘迷阵（肉鸽）、扫雷。',
+          '当前收录：连连看、消消乐、记忆翻牌、打地鼠、星尘迷阵（肉鸽）、扫雷、2048、幸运塔防。',
           '每款游戏独立结算与排名，互不影响。',
           '后续上线的新游戏会在评估稳定后接入。',
         ],
@@ -492,7 +498,7 @@ const RANKING_RULES = [
         items: [
           '可在日榜 / 周榜 / 月榜之间切换，周期定义同抽奖榜。',
           '排序依据为周期内该游戏的最高单局得分，榜单数字展示的也是这一次最好成绩。',
-          '连连看、记忆翻牌、打地鼠、扫雷支持「全部难度 / 简单 / 普通 / 困难」切换。',
+          '连连看、记忆翻牌、打地鼠、扫雷支持「全部难度 / 简单 / 普通 / 困难」切换；幸运塔防支持「全部地图」与六张地图分别查看。',
           '最好单局同分时，优先比较本周期获得积分，再按局数较少者优先，仍相同时按用户 ID 升序。',
         ],
       },
@@ -3438,6 +3444,7 @@ export default function RankingsPage() {
         .rk-page .game-card.t-roguelite::before { background: rgba(14, 165, 233, 0.4); }
         .rk-page .game-card.t-mines::before { background: rgba(71, 85, 105, 0.4); }
         .rk-page .game-card.t-2048::before { background: rgba(16, 185, 129, 0.4); }
+        .rk-page .game-card.t-lucky-td::before { background: rgba(249, 115, 22, 0.4); }
 
         .rk-page .game-card:hover {
           transform: translateY(-4px);
@@ -3477,6 +3484,7 @@ export default function RankingsPage() {
         .rk-page .game-card.t-roguelite .gc-icon { color: #0284c7; box-shadow: 0 10px 20px rgba(14, 165, 233, 0.22); }
         .rk-page .game-card.t-mines .gc-icon { color: #475569; box-shadow: 0 10px 20px rgba(71, 85, 105, 0.22); }
         .rk-page .game-card.t-2048 .gc-icon { color: #059669; box-shadow: 0 10px 20px rgba(16, 185, 129, 0.22); }
+        .rk-page .game-card.t-lucky-td .gc-icon { color: #ea580c; box-shadow: 0 10px 20px rgba(249, 115, 22, 0.22); }
 
         .rk-page .gc-title-wrap { flex: 1; min-width: 0; }
 
@@ -3544,6 +3552,7 @@ export default function RankingsPage() {
         .rk-page .game-card.t-roguelite .gc-metric-tag { background: rgba(14, 165, 233, 0.1); color: #0284c7; }
         .rk-page .game-card.t-mines .gc-metric-tag { background: rgba(71, 85, 105, 0.1); color: #475569; }
         .rk-page .game-card.t-2048 .gc-metric-tag { background: rgba(16, 185, 129, 0.1); color: #059669; }
+        .rk-page .game-card.t-lucky-td .gc-metric-tag { background: rgba(249, 115, 22, 0.1); color: #c2410c; }
 
         .rk-page .gc-top5 {
           display: flex;
@@ -5184,6 +5193,7 @@ interface GameCardProps {
 
 function GameCard({ group, myUserId }: GameCardProps) {
   const themeClass = GAME_THEME[group.gameType] ?? '';
+  const filterKind = group.gameType === 'lucky_td' ? '地图' : '难度';
   const defaultDifficulty = group.selectedDifficulty
     ?? group.difficultyOptions?.[0]?.value
     ?? '';
@@ -5215,7 +5225,7 @@ function GameCard({ group, myUserId }: GameCardProps) {
               className="gc-difficulty-select"
               value={activeDifficulty}
               onChange={(event) => setSelectedDifficulty(event.target.value)}
-              aria-label={`切换${GAME_LABEL[group.gameType]}榜单难度`}
+              aria-label={`切换${GAME_LABEL[group.gameType]}榜单${filterKind}`}
             >
               {group.difficultyOptions?.map((option) => (
                 <option key={option.value} value={option.value}>
@@ -5271,5 +5281,6 @@ function GameIcon({ gameType }: { gameType: SupportedGame }) {
   if (gameType === 'roguelite') return <Sparkles />;
   if (gameType === 'minesweeper') return <Bomb />;
   if (gameType === 'game_2048') return <Grid3X3 />;
+  if (gameType === 'lucky_td') return <Shield />;
   return <Sparkles />;
 }

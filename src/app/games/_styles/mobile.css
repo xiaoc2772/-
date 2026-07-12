@@ -1611,3 +1611,164 @@
     transform: none !important;
   }
 }
+
+/* ============================================================
+ * § Mobile stability layer —— 覆盖 7 个游戏与环保行动
+ * 目标：品牌自带浏览器下高度、触控、横向回弹和 hover 粘滞更稳定。
+ * ============================================================ */
+@media (max-width: 768px) {
+  :where(
+    .games-page,
+    .rogue-page,
+    .mine-page,
+    .whack-page,
+    .memory-page,
+    .match3-page,
+    .link-page,
+    .g2048-screen,
+    .eco,
+    .rk-page
+  ) {
+    min-height: 100vh;
+    min-height: 100svh;
+    min-height: calc(var(--app-vh, 1vh) * 100);
+    min-height: var(--app-visual-height, 100vh);
+    overflow-x: hidden;
+    overscroll-behavior-x: none;
+    -webkit-tap-highlight-color: transparent;
+    -webkit-text-size-adjust: 100%;
+  }
+
+  @supports (height: 100dvh) {
+    :where(
+      .games-page,
+      .rogue-page,
+      .mine-page,
+      .whack-page,
+      .memory-page,
+      .match3-page,
+      .link-page,
+      .g2048-screen,
+      .eco,
+      .rk-page
+    ) {
+      min-height: 100dvh;
+    }
+  }
+
+  :where(
+    .games-page,
+    .rogue-page,
+    .mine-page,
+    .whack-page,
+    .memory-page,
+    .match3-page,
+    .link-page,
+    .g2048-screen,
+    .eco,
+    .rk-page
+  ) :where(button, [role="button"], a, input, select, textarea) {
+    touch-action: manipulation;
+  }
+
+  :where(
+    .rogue-board,
+    .mine-board,
+    .whack-board,
+    .memory-board,
+    .match3-board,
+    .link-board,
+    .g2048-board,
+    .scene
+  ) {
+    overscroll-behavior: contain;
+    -webkit-user-select: none;
+    user-select: none;
+  }
+
+  :where(.g2048-board, .scene, .whack-hole) {
+    touch-action: none;
+  }
+
+  :where(.gm-bottom-bar, .eco-top, .g2048-topbar) {
+    transform: translateZ(0);
+    backface-visibility: hidden;
+  }
+
+  :where(.eco-modal, .g2048-result-modal, .g2048-rules-modal) {
+    max-height: min(88vh, calc(var(--app-visual-height, 100vh) - 28px));
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+}
+
+@media (hover: none), (pointer: coarse) {
+  :where(
+    .games-page,
+    .rogue-page,
+    .mine-page,
+    .whack-page,
+    .memory-page,
+    .match3-page,
+    .link-page,
+    .g2048-screen,
+    .eco
+  ) :where(a, button, .game-card, .gm-card, .glass-card, .sc):hover {
+    transform: none !important;
+  }
+
+  :where(
+    .games-page,
+    .rogue-page,
+    .mine-page,
+    .whack-page,
+    .memory-page,
+    .match3-page,
+    .link-page,
+    .g2048-screen,
+    .eco
+  ) :where(a, button, .game-card, .gm-card, .glass-card, .sc) {
+    transition-duration: 120ms;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :where(
+    .games-page,
+    .rogue-page,
+    .mine-page,
+    .whack-page,
+    .memory-page,
+    .match3-page,
+    .link-page,
+    .g2048-screen,
+    .eco
+  ) *,
+  :where(
+    .games-page,
+    .rogue-page,
+    .mine-page,
+    .whack-page,
+    .memory-page,
+    .match3-page,
+    .link-page,
+    .g2048-screen,
+    .eco
+  ) *::before,
+  :where(
+    .games-page,
+    .rogue-page,
+    .mine-page,
+    .whack-page,
+    .memory-page,
+    .match3-page,
+    .link-page,
+    .g2048-screen,
+    .eco
+  ) *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    scroll-behavior: auto !important;
+    transition-duration: 0.01ms !important;
+  }
+}

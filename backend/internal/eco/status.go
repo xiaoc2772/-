@@ -131,6 +131,7 @@ type PublicBoardEntry struct {
 	Status              string  `json:"status"`
 	CanSteal            bool    `json:"canSteal"`
 	StealDisabledReason *string `json:"stealDisabledReason"`
+	ProtectedUntil      *int64  `json:"protectedUntil"`
 	ThiefUserID         *int64  `json:"thiefUserId"`
 	ThiefName           *string `json:"thiefName"`
 	ThiefAvatarURL      *string `json:"thiefAvatarUrl"`
@@ -204,7 +205,7 @@ func (service *Service) GetStatus(ctx context.Context, userID int64, nowMs int64
 	if err != nil {
 		return StatusResponse{}, err
 	}
-	publicBoard, err := service.summarizePublicBoard(ctx, userID)
+	publicBoard, err := service.summarizePublicBoard(ctx, userID, nowMs)
 	if err != nil {
 		return StatusResponse{}, err
 	}
@@ -454,7 +455,7 @@ func (service *Service) loadPrizeClaimStats(ctx context.Context, dateKey string)
 	return stats, rows.Err()
 }
 
-func (service *Service) summarizePublicBoard(ctx context.Context, viewerUserID int64) (PublicBoardView, error) {
+func (service *Service) summarizePublicBoard(ctx context.Context, viewerUserID int64, nowMs int64) (PublicBoardView, error) {
 	remaining := defaultPrizeCountMap()
 	stock, err := service.loadGlobalPrizeStock(ctx)
 	if err != nil {
@@ -468,7 +469,7 @@ func (service *Service) summarizePublicBoard(ctx context.Context, viewerUserID i
 	if err != nil {
 		return PublicBoardView{}, err
 	}
-	entries, err := service.loadPublicBoardEntries(ctx, viewerUserID, hasActiveTheft)
+	entries, err := service.loadPublicBoardEntries(ctx, viewerUserID, hasActiveTheft, nowMs)
 	if err != nil {
 		return PublicBoardView{}, err
 	}
@@ -506,11 +507,18 @@ func (service *Service) hasActiveTheft(ctx context.Context, userID int64) (bool,
 	return exists, err
 }
 
-func (service *Service) loadPublicBoardEntries(ctx context.Context, viewerUserID int64, viewerHasActiveTheft bool) ([]PublicBoardEntry, error) {
+func (service *Service) loadPublicBoardEntries(ctx context.Context, viewerUserID int64, viewerHasActiveTheft bool, nowMs int64) ([]PublicBoardEntry, error) {
 	rows, err := service.db.Query(ctx,
 		`SELECT p.id, p.prize_key, p.owner_user_id, p.owner_name, p.owner_avatar_url,
 		        p.merchant_available_at_ms, p.status, p.thief_user_id, p.thief_name,
 		        p.theft_message, p.stolen_at_ms,
+		        COALESCE((
+		          SELECT MAX(t.resolved_at_ms) + $1
+		            FROM eco_thefts t
+		           WHERE t.public_entry_id = p.id
+		             AND t.outcome = 'caught'
+		             AND t.resolved_at_ms IS NOT NULL
+		        ), 0),
 		        owner.username, owner.display_name,
 		        thief.username, thief.display_name
 		   FROM eco_public_prizes p
@@ -519,6 +527,7 @@ func (service *Service) loadPublicBoardEntries(ctx context.Context, viewerUserID
 		  WHERE p.status IN ('listed', 'stolen')
 		  ORDER BY p.public_at_ms DESC
 		  LIMIT 30`,
+		theftProtectionMS,
 	)
 	if err != nil {
 		return nil, err
@@ -533,6 +542,7 @@ func (service *Service) loadPublicBoardEntries(ctx context.Context, viewerUserID
 		var thiefName sql.NullString
 		var theftMessage sql.NullString
 		var stolenAt sql.NullInt64
+		var protectedUntil int64
 		var ownerUsername sql.NullString
 		var ownerDisplayName sql.NullString
 		var thiefUsername sql.NullString
@@ -549,6 +559,7 @@ func (service *Service) loadPublicBoardEntries(ctx context.Context, viewerUserID
 			&thiefName,
 			&theftMessage,
 			&stolenAt,
+			&protectedUntil,
 			&ownerUsername,
 			&ownerDisplayName,
 			&thiefUsername,
@@ -586,15 +597,22 @@ func (service *Service) loadPublicBoardEntries(ctx context.Context, viewerUserID
 		if stolenAt.Valid {
 			entry.StolenAt = ptrInt64(stolenAt.Int64)
 		}
-		entry.CanSteal, entry.StealDisabledReason = stealState(entry, viewerUserID, viewerHasActiveTheft)
+		if protectedUntil > nowMs {
+			entry.ProtectedUntil = ptrInt64(protectedUntil)
+		}
+		entry.CanSteal, entry.StealDisabledReason = stealState(entry, viewerUserID, viewerHasActiveTheft, nowMs)
 		entries = append(entries, entry)
 	}
 	return entries, rows.Err()
 }
 
-func stealState(entry PublicBoardEntry, viewerUserID int64, viewerHasActiveTheft bool) (bool, *string) {
+func stealState(entry PublicBoardEntry, viewerUserID int64, viewerHasActiveTheft bool, nowMs int64) (bool, *string) {
 	if entry.Status != "listed" {
 		reason := "追查中"
+		return false, &reason
+	}
+	if entry.ProtectedUntil != nil && *entry.ProtectedUntil > nowMs {
+		reason := "保护中"
 		return false, &reason
 	}
 	if entry.OwnerUserID == viewerUserID {

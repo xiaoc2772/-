@@ -26,11 +26,12 @@ import {
   X,
 } from 'lucide-react';
 import { useRouter } from 'next/navigation';
+import { CancelConfirmModal } from '../_components/CancelConfirmModal';
 import {
   GAME2048_BOARD_SIZE,
   GAME2048_MAX_MOVES,
-  GAME2048_MAX_POINT_REWARD,
   GAME2048_REWARD_DIVISOR,
+  GAME2048_WIN_SCORE,
   GAME2048_WIN_TILE,
   calculateGame2048PointReward,
   createInitialGame2048Grid,
@@ -93,7 +94,9 @@ const TILE_SLIDE_MS = 135;
 const TILE_SETTLE_MS = TILE_SLIDE_MS + 24;
 const TILE_POP_MS = 185;
 const TILE_POP_CLEANUP_MS = TILE_POP_MS + 32;
+const CHECKPOINT_REALTIME_SYNC_INTERVAL = 8;
 const CHECKPOINT_SYNC_THRESHOLD = GAME2048_MAX_MOVES - 200;
+const GAME2048_SETTLEMENT_COOLDOWN_SECONDS = 5;
 const TILE_IMAGE_BASE = '/images-optimized/ui/games/2048/tiles';
 const GAME2048_TILE_IMAGE_MAX = 65536;
 const GAME2048_TILE_IMAGE_VALUES = [2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384, 32768, 65536] as const;
@@ -352,11 +355,21 @@ function getTileClass(value: number): string {
 }
 
 function getDigitsClass(value: number): string {
-  const digits = String(Math.max(0, value)).length;
+  const digits = formatTileValue(value).length;
   if (digits >= 6) return 'digits-6';
   if (digits >= 5) return 'digits-5';
   if (digits >= 4) return 'digits-4';
   return 'digits-short';
+}
+
+function trimShortNumber(value: number): string {
+  return value.toFixed(value >= 10 ? 1 : 2).replace(/\.0+$/, '').replace(/(\.\d*[1-9])0+$/, '$1');
+}
+
+function formatTileValue(value: number): string {
+  if (value >= 100_000_000) return `${trimShortNumber(value / 100_000_000)}亿`;
+  if (value >= 10_000) return `${trimShortNumber(value / 10_000)}万`;
+  return String(value);
 }
 
 function replayGame2048Segment(
@@ -394,6 +407,7 @@ export default function Game2048Page() {
   const [phase, setPhase] = useState<Phase>('ready');
   const [session, setSession] = useState<Game2048SessionView | null>(null);
   const [status, setStatus] = useState<Game2048Status | null>(null);
+  const [cooldownRemaining, setCooldownRemaining] = useState(0);
   const [grid, setGrid] = useState<Game2048Grid>(EMPTY_GRID);
   const [score, setScore] = useState(0);
   const [highestTile, setHighestTile] = useState(0);
@@ -405,6 +419,7 @@ export default function Game2048Page() {
   const [message, setMessage] = useState('准备开始 2048');
   const [isRestored, setIsRestored] = useState(false);
   const [showRules, setShowRules] = useState(false);
+  const [showCancelConfirm, setShowCancelConfirm] = useState(false);
   const [visualTiles, setVisualTiles] = useState<VisualTile[]>([]);
 
   const sessionRef = useRef<Game2048SessionView | null>(null);
@@ -593,6 +608,7 @@ export default function Game2048Page() {
       }
 
       setStatus(data.data);
+      setCooldownRemaining(Math.max(0, data.data.cooldownRemaining));
       setError(null);
 
       if (data.data.activeSession && !sessionRef.current && phaseRef.current === 'ready') {
@@ -616,12 +632,12 @@ export default function Game2048Page() {
   }, []);
 
   useEffect(() => {
-    if (phase !== 'ready' || !status?.inCooldown) return;
+    if (cooldownRemaining <= 0) return;
     const timer = window.setInterval(() => {
-      void fetchStatus();
+      setCooldownRemaining((current) => Math.max(0, current - 1));
     }, 1000);
     return () => window.clearInterval(timer);
-  }, [fetchStatus, phase, status?.inCooldown]);
+  }, [cooldownRemaining]);
 
   const startGame = useCallback(async () => {
     setLoading(true);
@@ -684,6 +700,11 @@ export default function Game2048Page() {
     }
   }, [applySimulation, fetchStatus, setVisualTilesSynced]);
 
+  const confirmCancelGame = useCallback(async () => {
+    await cancelGame();
+    setShowCancelConfirm(false);
+  }, [cancelGame]);
+
   const handleSettlementSuccess = useCallback((submitData: SubmitResponse) => {
     const record = submitData.record;
     clearStoredMoves(record.sessionId);
@@ -691,6 +712,7 @@ export default function Game2048Page() {
     setSession(null);
     sessionRef.current = null;
     setResult(record);
+    setCooldownRemaining((current) => Math.max(current, GAME2048_SETTLEMENT_COOLDOWN_SECONDS));
     applySimulation(record.grid, record.score, record.moves);
     syncVisualTilesFromGrid(record.grid);
     setHighestTile(record.highestTile);
@@ -743,13 +765,15 @@ export default function Game2048Page() {
     }
   }, [handleSettlementSuccess]);
 
-  const startCheckpointSync = useCallback((delayMs = 0) => {
+  const startCheckpointSync = useCallback((delayMs = 0, quiet = false) => {
     const activeSession = sessionRef.current;
     if (!activeSession || checkpointingRef.current || movesRef.current.length === 0) return;
 
     checkpointingRef.current = true;
     setCheckpointing(true);
-    setMessage('正在同步长局进度');
+    if (!quiet) {
+      setMessage('正在同步长局进度');
+    }
     setError(null);
 
     if (checkpointTimerRef.current !== null) {
@@ -792,10 +816,14 @@ export default function Game2048Page() {
           sessionRef.current = data.data;
           applySimulation(data.data.initialGrid, data.data.baseScore ?? 0, data.data.baseMoves ?? 0);
           syncVisualTilesFromGrid(data.data.initialGrid);
-          setMessage('长局进度已同步，可以继续游戏');
+          if (!quiet) {
+            setMessage('长局进度已同步，可以继续游戏');
+          }
         } catch (err) {
           setError(isAbortError(err) ? '同步长局进度超时，请稍后重试' : err instanceof Error ? err.message : '同步长局进度失败');
-          setMessage('长局进度同步失败，请重试');
+          if (!quiet) {
+            setMessage('长局进度同步失败，请重试');
+          }
         } finally {
           checkpointingRef.current = false;
           setCheckpointing(false);
@@ -806,6 +834,7 @@ export default function Game2048Page() {
 
   const handleMove = useCallback((direction: Game2048Direction) => {
     const activeSession = sessionRef.current;
+    if (showCancelConfirm) return;
     if (!activeSession || phaseRef.current !== 'playing' || loading || checkpointingRef.current) return;
     if (movesRef.current.length >= CHECKPOINT_SYNC_THRESHOLD) {
       startCheckpointSync();
@@ -831,7 +860,8 @@ export default function Game2048Page() {
     const nextMoves = [...movesRef.current, direction];
     const baseMoves = activeSession.baseMoves ?? 0;
     const nextGrid = spawnGame2048Tile(movement.grid, activeSession.seed, baseMoves + nextMoves.length + 1);
-    const nextScore = scoreRef.current + movement.scoreDelta;
+    const previousScore = scoreRef.current;
+    const nextScore = previousScore + movement.scoreDelta;
     const nextHighest = getGame2048HighestTile(nextGrid);
     const nextGameOver = isGame2048Over(nextGrid);
     const previousHighest = highestTileRef.current;
@@ -857,12 +887,18 @@ export default function Game2048Page() {
       startCheckpointSync(TILE_SETTLE_MS + TILE_POP_CLEANUP_MS);
     } else if (nextGameOver) {
       setMessage('棋盘已满，本局可以结算');
+    } else if (previousScore < GAME2048_WIN_SCORE && nextScore >= GAME2048_WIN_SCORE) {
+      setMessage(`已达到 ${GAME2048_WIN_SCORE.toLocaleString()} 分胜利线，可以继续冲更高分`);
     } else if (previousHighest < GAME2048_WIN_TILE && nextHighest >= GAME2048_WIN_TILE) {
-      setMessage('已合成 2048，可以继续冲更高分');
+      setMessage('已合成 2048 里程碑，可以继续冲更高分');
     } else {
       setMessage(`本步合成 +${movement.scoreDelta}`);
     }
-  }, [applySimulation, createVisualTileId, loading, scheduleVisualTileSettling, setVisualTilesSynced, startCheckpointSync]);
+
+    if (nextMoves.length > 0 && nextMoves.length % CHECKPOINT_REALTIME_SYNC_INTERVAL === 0) {
+      startCheckpointSync(TILE_SETTLE_MS + TILE_POP_CLEANUP_MS, true);
+    }
+  }, [applySimulation, createVisualTileId, loading, scheduleVisualTileSettling, setVisualTilesSynced, showCancelConfirm, startCheckpointSync]);
 
   useEffect(() => {
     handleMoveRef.current = handleMove;
@@ -871,14 +907,14 @@ export default function Game2048Page() {
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       const direction = getDirectionFromKey(event.key);
-      if (!direction || phaseRef.current !== 'playing') return;
+      if (!direction || phaseRef.current !== 'playing' || showCancelConfirm) return;
       event.preventDefault();
       handleMove(direction);
     };
 
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [handleMove]);
+  }, [handleMove, showCancelConfirm]);
 
   const finishBoardSwipe = useCallback((clientX: number, clientY: number) => {
     const start = pointerStartRef.current;
@@ -898,7 +934,7 @@ export default function Game2048Page() {
   }, [handleMove]);
 
   const handlePointerDown = useCallback((event: PointerEvent<HTMLDivElement>) => {
-    if (phaseRef.current !== 'playing' || loading) return;
+    if (showCancelConfirm || phaseRef.current !== 'playing' || loading) return;
     lastPointerEventAtRef.current = Date.now();
     event.preventDefault();
     pointerStartRef.current = {
@@ -911,7 +947,7 @@ export default function Game2048Page() {
     } catch {
       // 部分浏览器释放过快时可能无法捕获，后续 pointerup 仍可按坐标处理。
     }
-  }, [loading]);
+  }, [loading, showCancelConfirm]);
 
   const handlePointerEnd = useCallback((event: PointerEvent<HTMLDivElement>) => {
     const start = pointerStartRef.current;
@@ -933,14 +969,14 @@ export default function Game2048Page() {
 
   const handleMouseDown = useCallback((event: ReactMouseEvent<HTMLDivElement>) => {
     if (Date.now() - lastPointerEventAtRef.current < 500) return;
-    if (phaseRef.current !== 'playing' || loading) return;
+    if (showCancelConfirm || phaseRef.current !== 'playing' || loading) return;
     event.preventDefault();
     pointerStartRef.current = {
       x: event.clientX,
       y: event.clientY,
       pointerId: null,
     };
-  }, [loading]);
+  }, [loading, showCancelConfirm]);
 
   const handleMouseUp = useCallback((event: ReactMouseEvent<HTMLDivElement>) => {
     if (Date.now() - lastPointerEventAtRef.current < 500) return;
@@ -948,9 +984,10 @@ export default function Game2048Page() {
     finishBoardSwipe(event.clientX, event.clientY);
   }, [finishBoardSwipe]);
 
-  const canPlay = phase === 'playing' && !!session && !loading && !checkpointing;
-  const canSettle = (phase === 'playing' || phase === 'submitting') && !!session && !checkpointing;
+  const canPlay = phase === 'playing' && !!session && !showCancelConfirm && !loading && !checkpointing;
+  const canSettle = (phase === 'playing' || phase === 'submitting') && !!session && !showCancelConfirm && !checkpointing;
   const gameOver = isGame2048Over(grid);
+  const inCooldown = cooldownRemaining > 0;
 
   return (
     <div className="g2048-screen">
@@ -998,7 +1035,7 @@ export default function Game2048Page() {
               <button
                 type="button"
                 className="g2048-action-btn danger"
-                onClick={() => void cancelGame()}
+                onClick={() => setShowCancelConfirm(true)}
                 disabled={loading || checkpointing}
               >
                 <X className="h-4 w-4" />
@@ -1017,19 +1054,19 @@ export default function Game2048Page() {
             <p>
               每次有效移动都会生成新方块。达到 2048 有额外里程碑积分，也可以继续冲更高分。
             </p>
-            {status?.inCooldown && (
+            {inCooldown && (
               <div className="g2048-cooldown-note">
-                冷却中，请等待 {status.cooldownRemaining} 秒
+                冷却中，请等待 {cooldownRemaining} 秒
               </div>
             )}
             <button
               type="button"
               className="g2048-primary-btn"
               onClick={() => void startGame()}
-              disabled={loading || status?.inCooldown}
+              disabled={loading || inCooldown}
             >
               {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
-              {loading ? '处理中' : status?.inCooldown ? '冷却中' : '开始游戏'}
+              {loading ? '处理中' : inCooldown ? '冷却中' : '开始游戏'}
             </button>
           </section>
         )}
@@ -1106,12 +1143,21 @@ export default function Game2048Page() {
           <Game2048ResultModal
             result={result}
             loading={loading}
-            cooldownRemaining={status?.cooldownRemaining ?? 0}
+            cooldownRemaining={cooldownRemaining}
             onStart={() => void startGame()}
           />
         )}
 
         {showRules && <Game2048RulesModal onClose={() => setShowRules(false)} />}
+        <CancelConfirmModal
+          open={showCancelConfirm}
+          loading={loading || checkpointing}
+          title="确认放弃 2048？"
+          description="当前棋盘进度会被取消，本局不会进入结算。"
+          detail="当前得分、最高方块和有效步数都会丢失。"
+          onConfirm={() => void confirmCancelGame()}
+          onClose={() => setShowCancelConfirm(false)}
+        />
       </div>
       </main>
 
@@ -1806,6 +1852,7 @@ const Game2048Board = memo(function Game2048Board({
 
 const Game2048Tile = memo(function Game2048Tile({ tile }: { tile: VisualTile }) {
   const hasImg = tile.value <= GAME2048_TILE_IMAGE_MAX;
+  const displayValue = formatTileValue(tile.value);
   const tileStyle = {
     ...(hasImg ? { ['--tile-img']: `url('${TILE_IMAGE_BASE}/${tile.value}.webp')` } : {}),
     ...(typeof tile.fromCol === 'number' ? { ['--tile-from-x']: TILE_OFFSET_PERCENT[tile.fromCol] } : {}),
@@ -1823,8 +1870,10 @@ const Game2048Tile = memo(function Game2048Tile({ tile }: { tile: VisualTile }) 
         tile.state ? `is-${tile.state}` : '',
       ].filter(Boolean).join(' ')}
       style={tileStyle}
+      title={String(tile.value)}
+      aria-label={`方块 ${tile.value}`}
     >
-      <span className="g2048-tile-value">{tile.value}</span>
+      <span className="g2048-tile-value">{displayValue}</span>
     </div>
   );
 });
@@ -1868,7 +1917,7 @@ function Game2048ResultModal({
             结算完成
           </div>
           <h2 id="g2048-result-title" className="mt-1 text-2xl font-black text-slate-950">
-            {result.won ? '达成 2048' : result.gameOver ? '棋盘结算' : '当前成绩结算'}
+            {result.won ? '挑战胜利' : '挑战失败'}
           </h2>
           <p className="mt-3 text-sm font-bold leading-6 text-slate-500">
             本局得分 {result.score.toLocaleString()}，最高方块 {result.highestTile}，获得 {result.pointsEarned} 福利积分。
@@ -1937,9 +1986,9 @@ function Game2048RulesModal({ onClose }: { onClose: () => void }) {
 
         <div className="g2048-rule-grid">
           <Game2048RuleItem icon={<Move />} title="合成规则" text="5x5 棋盘内同一方向滑动，所有方块向该方向靠拢，相邻且数字相同的方块会合并一次。" />
-          <Game2048RuleItem icon={<Hash />} title="胜利目标" text={`合成 ${GAME2048_WIN_TILE} 方块即达成目标，达成后仍可继续冲更高分。`} />
+          <Game2048RuleItem icon={<Hash />} title="胜利目标" text={`本局得分达到 ${GAME2048_WIN_SCORE.toLocaleString()} 分即判定胜利，达成后仍可继续冲击更高分。`} />
           <Game2048RuleItem icon={<Trophy />} title="得分规则" text="每次合并后的新方块数值会计入得分，服务端按开局种子和操作序列复算。" />
-          <Game2048RuleItem icon={<Coins />} title="积分规则" text={`积分 = floor(得分 / ${GAME2048_REWARD_DIVISOR}) + 里程碑奖励，单局最高 ${GAME2048_MAX_POINT_REWARD}。`} />
+          <Game2048RuleItem icon={<Coins />} title="积分规则" text={`积分 = floor(得分 / ${GAME2048_REWARD_DIVISOR}) + 最高方块里程碑奖励；4096 之后每突破一档，新增奖励会继续递增。`} />
         </div>
       </div>
     </div>

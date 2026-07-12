@@ -72,8 +72,11 @@ body {
   background: #fdfcf8; /* 更加温暖的米白底色 */
   font-family: var(--font-family-sans);
   min-height: 100vh;
+  min-height: 100svh;
   min-height: calc(var(--app-vh, 1vh) * 100);
+  min-height: var(--app-visual-height, 100vh);
   overflow-x: hidden;
+  overscroll-behavior-x: none;
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
   /* [Perf-3] 纯 CSS 渐变背景，替代 fixed + blur DOM 元素 */
@@ -83,6 +86,21 @@ body {
     radial-gradient(circle at 100% 0%, rgba(254, 215, 170, 0.4) 0px, transparent 40%),
     radial-gradient(circle at 100% 100%, rgba(255, 247, 237, 0.3) 0px, transparent 40%),
     radial-gradient(circle at 0% 100%, rgba(255, 237, 213, 0.3) 0px, transparent 40%);
+}
+
+@supports (height: 100dvh) {
+  body,
+  .min-h-screen {
+    min-height: 100dvh;
+  }
+
+  .h-screen {
+    height: 100dvh;
+  }
+
+  .max-h-screen {
+    max-height: 100dvh;
+  }
 }
 
 img,
@@ -109,6 +127,15 @@ button {
 }
 
 @media (max-width: 768px) {
+  body {
+    min-height: var(--app-visual-height, 100vh);
+    -webkit-overflow-scrolling: touch;
+  }
+
+  :focus-visible {
+    outline-offset: 3px;
+  }
+
   input,
   select,
   textarea {
