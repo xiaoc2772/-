@@ -3,12 +3,12 @@ package game2048
 const (
 	GameType = "game_2048"
 
-	BoardSize      = 5
-	WinTile        = 2048
-	MaxMoves       = 8000
-	RewardDivisor  = int64(128)
-	MaxPointReward = int64(500)
-	MaxTileValue   = 131072
+	BoardSize     = 5
+	WinTile       = 2048
+	WinScore      = int64(20000)
+	MaxMoves      = 8000
+	RewardDivisor = int64(128)
+	MaxTileValue  = 1073741824
 )
 
 type Direction string
@@ -70,6 +70,7 @@ type Record struct {
 	UserID         int64  `json:"userId"`
 	SessionID      string `json:"sessionId"`
 	GameType       string `json:"gameType"`
+	Pending        bool   `json:"pending,omitempty"`
 	Score          int64  `json:"score"`
 	PointsEarned   int64  `json:"pointsEarned"`
 	HighestTile    int    `json:"highestTile"`

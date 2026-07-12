@@ -12,6 +12,9 @@ import (
 
 const (
 	thiefForcedAchievementMS = int64(10 * 60 * 60 * 1000)
+	theftBaseCatchRate       = 0.22
+	theftHourlyCatchRateStep = 0.02
+	theftRepeatCatchPenalty  = 0.05
 )
 
 var ecoTheftInvestigationRollFloat = rand.Float64
@@ -101,10 +104,9 @@ func (service *Service) processOneTheftInvestigation(ctx context.Context, nowMs 
 		return "escaped", tx.Commit(ctx)
 	}
 
-	hours := (nowMs - record.StolenAtMs) / int64(60*60*1000)
-	caughtProbability := 0.1 + float64(maxInt64(0, hours))*0.03
-	if caughtProbability > 1 {
-		caughtProbability = 1
+	caughtProbability, err := theftCaughtProbability(ctx, tx, record, nowMs)
+	if err != nil {
+		return "", err
 	}
 	if ecoTheftInvestigationRollFloat() >= caughtProbability {
 		if err := rescheduleTheftInvestigation(ctx, tx, record.ID); err != nil {
@@ -118,6 +120,32 @@ func (service *Service) processOneTheftInvestigation(ctx context.Context, nowMs 
 		return "", err
 	}
 	return outcome, tx.Commit(ctx)
+}
+
+func theftCaughtProbability(ctx context.Context, tx pgx.Tx, record dueTheftRecord, nowMs int64) (float64, error) {
+	var previousThefts int64
+	if err := tx.QueryRow(ctx,
+		`SELECT COUNT(*)
+		   FROM eco_thefts
+		  WHERE public_entry_id = $1
+		    AND id <> $2`,
+		record.PublicEntryID,
+		record.ID,
+	).Scan(&previousThefts); err != nil {
+		return 0, err
+	}
+
+	hours := (nowMs - record.StolenAtMs) / int64(60*60*1000)
+	probability := theftBaseCatchRate -
+		float64(maxInt64(0, previousThefts))*theftRepeatCatchPenalty +
+		float64(maxInt64(0, hours))*theftHourlyCatchRateStep
+	if probability < 0 {
+		return 0, nil
+	}
+	if probability > 1 {
+		return 1, nil
+	}
+	return probability, nil
 }
 
 func findDueTheftRecordForUpdate(ctx context.Context, tx pgx.Tx, nowMs int64) (dueTheftRecord, bool, error) {

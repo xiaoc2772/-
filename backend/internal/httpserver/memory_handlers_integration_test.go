@@ -25,7 +25,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-func TestMemoryHTTPCompleteGameAndRejectDuplicateSettlement(t *testing.T) {
+func TestMemoryHTTPCompleteGameAndReplayDuplicateSettlement(t *testing.T) {
 	ctx := context.Background()
 	databaseURL := os.Getenv("TEST_DATABASE_URL")
 	if databaseURL == "" {
@@ -161,8 +161,8 @@ func TestMemoryHTTPCompleteGameAndRejectDuplicateSettlement(t *testing.T) {
 		}()
 	}
 	waitGroup.Wait()
-	if duplicateSuccesses.Load() != 0 || duplicateFailures.Load() != 20 {
-		t.Fatalf("duplicate submit should be rejected after first settlement, successes=%d failures=%d", duplicateSuccesses.Load(), duplicateFailures.Load())
+	if duplicateSuccesses.Load() != 20 || duplicateFailures.Load() != 0 {
+		t.Fatalf("duplicate submit should replay settled record, successes=%d failures=%d", duplicateSuccesses.Load(), duplicateFailures.Load())
 	}
 
 	var balance int64

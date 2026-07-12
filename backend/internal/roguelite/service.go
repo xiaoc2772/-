@@ -20,11 +20,11 @@ import (
 )
 
 const (
-	sessionTTLSeconds      = int64(2 * 60 * 60)
+	sessionTTLSeconds      = int64(12 * 60 * 60)
 	cooldownTTLSeconds     = int64(5)
 	maxRecordsListSize     = 50
 	defaultRecordsListSize = 10
-	MaxActions             = 2400
+	MaxActions             = 20000
 	retainedActionLogLimit = 120
 	minFinishDurationMs    = int64(2000)
 	maxRetryableTxRetries  = 12
@@ -198,8 +198,12 @@ func (service *Service) Step(ctx context.Context, user auth.User, input StepInpu
 			return nil
 		}
 		session.State = resolved.State
+		session.ExpiresAt = nowMs + sessionTTLSeconds*1000
 		appendCompactAction(session, input.Action)
 		if err := updateSession(ctx, tx, *session); err != nil {
+			return err
+		}
+		if err := upsertRecord(ctx, tx, buildRecordFromSession(*session, 0, time.Now(), true)); err != nil {
 			return err
 		}
 		view := BuildSessionView(*session)
@@ -224,7 +228,7 @@ func (service *Service) Submit(ctx context.Context, user auth.User, input Submit
 			return err
 		}
 		if session == nil {
-			return service.settledRecordOrFailure(ctx, tx, user.ID, input.SessionID, "游戏会话不存在或已过期", &output)
+			return service.settledRecordOrFailure(ctx, tx, user, input.SessionID, "游戏会话不存在或已过期", &output)
 		}
 		if session.UserID != user.ID {
 			output = SubmitResult{Success: false, Message: "会话不属于该用户"}
@@ -233,10 +237,10 @@ func (service *Service) Submit(ctx context.Context, user auth.User, input Submit
 		if ok, err := isCurrentActiveSession(ctx, tx, user.ID, session.ID); err != nil {
 			return err
 		} else if !ok {
-			return service.settledRecordOrFailure(ctx, tx, user.ID, session.ID, "游戏会话已不是当前活跃局", &output)
+			return service.settledRecordOrFailure(ctx, tx, user, session.ID, "游戏会话已不是当前活跃局", &output)
 		}
 		if session.Status != "playing" {
-			return service.settledRecordOrFailure(ctx, tx, user.ID, session.ID, "游戏会话已结束", &output)
+			return service.settledRecordOrFailure(ctx, tx, user, session.ID, "游戏会话已结束", &output)
 		}
 		now := time.Now()
 		nowMs := millis(now)
@@ -244,7 +248,7 @@ func (service *Service) Submit(ctx context.Context, user auth.User, input Submit
 			if err := deleteSessionAndActive(ctx, tx, user.ID, session.ID); err != nil {
 				return err
 			}
-			return service.settledRecordOrFailure(ctx, tx, user.ID, session.ID, "游戏会话已过期", &output)
+			return service.settledRecordOrFailure(ctx, tx, user, session.ID, "游戏会话已过期", &output)
 		}
 		if session.State.Status == StatusPlaying {
 			output = SubmitResult{Success: false, Message: "请先完成本局再结算"}
@@ -273,27 +277,9 @@ func (service *Service) Submit(ctx context.Context, user auth.User, input Submit
 		if err != nil {
 			return err
 		}
-		record := Record{
-			ID:               randomHex(16),
-			UserID:           user.ID,
-			SessionID:        session.ID,
-			GameType:         GameType,
-			Won:              session.State.Status == StatusEscaped,
-			FinalFloor:       session.State.Floor,
-			FloorsCleared:    session.State.Player.FloorsCleared,
-			Score:            score,
-			PointsEarned:     pointsEarned,
-			Stardust:         session.State.Player.Stardust,
-			HPRemaining:      maxInt(0, session.State.Player.HP),
-			Relics:           len(session.State.Player.Relics),
-			MonstersDefeated: session.State.Player.MonstersDefeated,
-			ChestsOpened:     session.State.Player.ChestsOpened,
-			StepsUsed:        getMoveCount(*session),
-			Duration:         duration,
-			ScoreBreakdown:   scoreBreakdown,
-			CreatedAt:        nowMs,
-		}
-		if err := insertRecord(ctx, tx, record); err != nil {
+		record := buildRecordFromSession(*session, pointsEarned, now, false)
+		record.Duration = duration
+		if err := upsertRecord(ctx, tx, record); err != nil {
 			return err
 		}
 		if err := incrementDailyStats(ctx, tx, user.ID, score, dailyEarned, now); err != nil {
@@ -330,6 +316,9 @@ func (service *Service) Cancel(ctx context.Context, user auth.User) (SimpleResul
 		if active == nil {
 			output = SimpleResult{Success: false, Message: "没有正在进行的游戏"}
 			return nil
+		}
+		if err := deleteRecordBySession(ctx, tx, user.ID, active.ID); err != nil {
+			return err
 		}
 		if err := deleteSessionAndActive(ctx, tx, user.ID, active.ID); err != nil {
 			return err
@@ -379,17 +368,55 @@ func appendCompactAction(session *Session, action Action) {
 	}
 }
 
-func (service *Service) settledRecordOrFailure(ctx context.Context, tx pgx.Tx, userID int64, sessionID string, message string, output *SubmitResult) error {
-	record, err := findSettledRecord(ctx, tx, userID, sessionID)
+func (service *Service) settledRecordOrFailure(ctx context.Context, tx pgx.Tx, user auth.User, sessionID string, message string, output *SubmitResult) error {
+	record, err := findRecordForUpdateBySession(ctx, tx, user.ID, sessionID)
 	if err != nil {
 		return err
 	}
 	if record != nil {
+		if record.Pending && record.Finished {
+			finalized, err := service.finalizePendingRecord(ctx, tx, user, *record)
+			if err != nil {
+				return err
+			}
+			record = finalized
+		}
 		*output = SubmitResult{Success: true, Record: record, PointsEarned: record.PointsEarned}
 		return nil
 	}
 	*output = SubmitResult{Success: false, Message: message}
 	return nil
+}
+
+func (service *Service) finalizePendingRecord(ctx context.Context, tx pgx.Tx, user auth.User, record Record) (*Record, error) {
+	if !record.Finished {
+		return &record, nil
+	}
+	pointReward := int64(CalculatePointReward(int(record.Score)))
+	dailyLimit, err := systemconfig.DailyPointsLimit(ctx, tx)
+	if err != nil {
+		return nil, err
+	}
+	pointsEarned, dailyEarned, err := addGamePointsWithLimit(
+		ctx,
+		tx,
+		user,
+		pointReward-record.PointsEarned,
+		dailyLimit,
+		fmt.Sprintf("星尘迷阵 %s 得分 %d，福利积分 %d", recordResultLabel(record), record.Score, pointReward),
+	)
+	if err != nil {
+		return nil, err
+	}
+	record.PointsEarned += pointsEarned
+	record.Pending = false
+	if err := upsertRecord(ctx, tx, record); err != nil {
+		return nil, err
+	}
+	if err := incrementDailyStats(ctx, tx, user.ID, record.Score, dailyEarned, time.UnixMilli(record.CreatedAt)); err != nil {
+		return nil, err
+	}
+	return &record, nil
 }
 
 func (service *Service) withRetryableTx(ctx context.Context, fn func(tx pgx.Tx) error) error {
@@ -574,11 +601,20 @@ func updateSession(ctx context.Context, tx pgx.Tx, session Session) error {
 	if err != nil {
 		return err
 	}
-	_, err = tx.Exec(ctx,
+	expiresAt := time.UnixMilli(session.ExpiresAt)
+	if _, err = tx.Exec(ctx,
 		`UPDATE game_sessions
-		 SET status = $1, payload = $2, updated_at = now()
-		 WHERE id = $3 AND game_type = $4`,
-		session.Status, raw, session.ID, GameType,
+		 SET status = $1, payload = $2, expires_at = $3, updated_at = now()
+		 WHERE id = $4 AND game_type = $5`,
+		session.Status, raw, expiresAt, session.ID, GameType,
+	); err != nil {
+		return err
+	}
+	_, err = tx.Exec(ctx,
+		`UPDATE active_game_sessions
+		 SET expires_at = $3
+		 WHERE user_id = $1 AND game_type = $2`,
+		session.UserID, GameType, expiresAt,
 	)
 	return err
 }
@@ -696,9 +732,62 @@ func addGamePointsWithLimit(ctx context.Context, tx pgx.Tx, user auth.User, poin
 	return grant, nextDaily, nil
 }
 
-func insertRecord(ctx context.Context, tx pgx.Tx, record Record) error {
+func buildRecordFromSession(session Session, pointsEarned int64, now time.Time, pending bool) Record {
+	scoreBreakdown := CalculateScore(session.State)
+	duration := millis(now) - session.StartedAt
+	if duration < 0 {
+		duration = 0
+	}
+	maxDuration := sessionTTLSeconds * 1000
+	if duration > maxDuration {
+		duration = maxDuration
+	}
+	return Record{
+		ID:               randomHex(16),
+		UserID:           session.UserID,
+		SessionID:        session.ID,
+		GameType:         GameType,
+		Pending:          pending,
+		Finished:         session.State.Status != StatusPlaying,
+		Won:              session.State.Status == StatusEscaped,
+		FinalFloor:       session.State.Floor,
+		FloorsCleared:    session.State.Player.FloorsCleared,
+		Score:            int64(scoreBreakdown.Total),
+		PointsEarned:     pointsEarned,
+		Stardust:         session.State.Player.Stardust,
+		HPRemaining:      maxInt(0, session.State.Player.HP),
+		Relics:           len(session.State.Player.Relics),
+		MonstersDefeated: session.State.Player.MonstersDefeated,
+		ChestsOpened:     session.State.Player.ChestsOpened,
+		StepsUsed:        getMoveCount(session),
+		Duration:         duration,
+		ScoreBreakdown:   scoreBreakdown,
+		CreatedAt:        millis(now),
+	}
+}
+
+func upsertRecord(ctx context.Context, tx pgx.Tx, record Record) error {
+	existing, err := findRecordForUpdateBySession(ctx, tx, record.UserID, record.SessionID)
+	if err != nil {
+		return err
+	}
+	if existing != nil {
+		record.ID = existing.ID
+		if record.PointsEarned < existing.PointsEarned {
+			record.PointsEarned = existing.PointsEarned
+		}
+	}
 	raw, err := json.Marshal(record)
 	if err != nil {
+		return err
+	}
+	if existing != nil {
+		_, err = tx.Exec(ctx,
+			`UPDATE game_records
+			 SET difficulty = $1, score = $2, points_earned = $3, payload = $4, created_at = $5
+			 WHERE id = $6`,
+			"", record.Score, record.PointsEarned, raw, time.UnixMilli(record.CreatedAt), record.ID,
+		)
 		return err
 	}
 	_, err = tx.Exec(ctx,
@@ -714,6 +803,7 @@ func listRecords(ctx context.Context, tx pgx.Tx, userID int64, limit int) ([]Rec
 		`SELECT payload
 		 FROM game_records
 		 WHERE user_id = $1 AND game_type = $2
+		   AND COALESCE((payload->>'pending')::boolean, false) = false
 		 ORDER BY created_at DESC, id DESC
 		 LIMIT $3`,
 		userID, GameType, limit,
@@ -735,6 +825,30 @@ func listRecords(ctx context.Context, tx pgx.Tx, userID int64, limit int) ([]Rec
 		records = append(records, record)
 	}
 	return records, rows.Err()
+}
+
+func findRecordForUpdateBySession(ctx context.Context, tx pgx.Tx, userID int64, sessionID string) (*Record, error) {
+	var raw []byte
+	err := tx.QueryRow(ctx,
+		`SELECT payload
+		 FROM game_records
+		 WHERE user_id = $1 AND game_type = $2 AND session_id = $3
+		 ORDER BY created_at DESC, id DESC
+		 LIMIT 1
+		 FOR UPDATE`,
+		userID, GameType, sessionID,
+	).Scan(&raw)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	var record Record
+	if err := json.Unmarshal(raw, &record); err != nil {
+		return nil, err
+	}
+	return &record, nil
 }
 
 func findSettledRecord(ctx context.Context, tx pgx.Tx, userID int64, sessionID string) (*Record, error) {
@@ -764,6 +878,16 @@ func findSettledRecord(ctx context.Context, tx pgx.Tx, userID int64, sessionID s
 		}
 	}
 	return nil, rows.Err()
+}
+
+func deleteRecordBySession(ctx context.Context, tx pgx.Tx, userID int64, sessionID string) error {
+	_, err := tx.Exec(ctx,
+		`DELETE FROM game_records
+		 WHERE user_id = $1 AND game_type = $2 AND session_id = $3
+		   AND COALESCE((payload->>'pending')::boolean, false) = true`,
+		userID, GameType, sessionID,
+	)
+	return err
 }
 
 func isCurrentActiveSession(ctx context.Context, tx pgx.Tx, userID int64, sessionID string) (bool, error) {
@@ -800,6 +924,13 @@ func resultLabel(state GameState) string {
 		return "成功撤离"
 	}
 	return fmt.Sprintf("第%d层失败", state.Floor)
+}
+
+func recordResultLabel(record Record) string {
+	if record.Won {
+		return "成功撤离"
+	}
+	return fmt.Sprintf("第%d层失败", record.FinalFloor)
 }
 
 func randomHex(size int) string {

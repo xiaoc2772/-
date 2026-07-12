@@ -5,6 +5,7 @@ import Link from 'next/link';
 import {
   Sparkles,
   Bomb,
+  Castle,
   Hammer,
   Layers,
   Grid3x3,
@@ -28,7 +29,7 @@ import type { PublicAchievement } from '@/lib/profile-achievements';
 // Game metadata
 // ──────────────────────────────────────────────────
 
-type GameKey = 'roguelite' | 'minesweeper' | 'whack-mole' | 'memory' | 'match3' | 'linkgame' | '2048';
+type GameKey = 'roguelite' | 'minesweeper' | 'whack-mole' | 'memory' | 'match3' | 'linkgame' | '2048' | 'lucky-td';
 
 interface GameMeta {
   key: GameKey;
@@ -107,6 +108,15 @@ const GAMES: readonly GameMeta[] = [
     image: `${GAME_CARD_IMAGE_BASE}/covers/2048.webp`,
     mascot: `${GAME_CARD_IMAGE_BASE}/mascots/2048.webp`,
     href: '/games/2048',
+  },
+  {
+    key: 'lucky-td',
+    name: '幸运塔防',
+    description: '横屏塔防：部署干员阻挡敌潮，守住 30 波。',
+    Icon: Castle,
+    image: `${GAME_CARD_IMAGE_BASE}/covers/lucky-td.webp`,
+    mascot: `${GAME_CARD_IMAGE_BASE}/mascots/lucky-td.webp`,
+    href: '/games/lucky-td',
   },
 ] as const;
 
@@ -283,7 +293,7 @@ export default function GamesPage() {
             <div className="avatar">
               {user?.avatarUrl ? (
                 // eslint-disable-next-line @next/next/no-img-element
-                <img src={user.avatarUrl} alt={user.displayName} className="avatar-img" />
+                <img src={user.avatarUrl} alt={user.displayName} className="avatar-img" decoding="async" />
               ) : (
                 (user?.displayName?.[0] ?? user?.username?.[0] ?? '?').toUpperCase()
               )}
@@ -335,7 +345,7 @@ export default function GamesPage() {
             <div className="hero-text">
               <div className="hero-badge">
                 <Star size={12} fill="currentColor" strokeWidth={0} />
-                LUCKY 游戏中心 · 7 款挑战
+                LUCKY 游戏中心 · {GAMES.length} 款挑战
               </div>
               <h1 className="hero-title">
                 挑战小游戏<br />
@@ -1353,8 +1363,13 @@ function GameLibrary({
       </div>
 
       <div className="game-grid">
-        {games.map((g) => (
-          <GameCard key={g.key} game={g} progress={profile?.perGame[g.key]} />
+        {games.map((g, index) => (
+          <GameCard
+            key={g.key}
+            game={g}
+            progress={profile?.perGame[g.key]}
+            eager={index < 2}
+          />
         ))}
       </div>
     </>
@@ -1364,9 +1379,11 @@ function GameLibrary({
 function GameCard({
   game,
   progress,
+  eager,
 }: {
   game: GameMeta;
   progress: GameProgress | undefined;
+  eager: boolean;
 }) {
   const bestScore = progress?.bestScore ?? 0;
   const totalPoints = progress?.totalPointsEarned ?? 0;
@@ -1380,7 +1397,9 @@ function GameCard({
           src={game.image}
           alt={`${game.name} 封面`}
           className="gc-image"
-          loading="lazy"
+          loading={eager ? "eager" : "lazy"}
+          decoding="async"
+          fetchPriority={eager ? "high" : "auto"}
         />
         {/* eslint-disable-next-line @next/next/no-img-element */}
         <img
@@ -1389,6 +1408,7 @@ function GameCard({
           aria-hidden
           className="gc-mascot"
           loading="lazy"
+          decoding="async"
         />
       </div>
 

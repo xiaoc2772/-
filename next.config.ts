@@ -9,7 +9,11 @@ const securityHeaders = [
 ];
 
 const staticImageCacheHeaders = [
-  { key: "Cache-Control", value: "public, max-age=2592000" },
+  { key: "Cache-Control", value: "public, max-age=31536000, immutable" },
+];
+
+const publicImageCacheHeaders = [
+  { key: "Cache-Control", value: "public, max-age=2592000, stale-while-revalidate=86400" },
 ];
 
 const nextConfig: NextConfig = {
@@ -37,6 +41,10 @@ const nextConfig: NextConfig = {
       {
         source: "/images-optimized/:path*",
         headers: [...securityHeaders, ...staticImageCacheHeaders],
+      },
+      {
+        source: "/images/:path*",
+        headers: [...securityHeaders, ...publicImageCacheHeaders],
       },
       {
         source: "/:path*",

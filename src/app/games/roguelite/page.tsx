@@ -33,6 +33,7 @@ import {
   type RogueliteStateView,
 } from '@/lib/roguelite-engine';
 import type { RogueliteGameRecord, RogueliteSessionView } from '@/lib/roguelite-types';
+import { CancelConfirmModal } from '../_components/CancelConfirmModal';
 
 interface RogueliteStatus {
   balance: number;
@@ -269,6 +270,7 @@ export default function RoguelitePage() {
   const [error, setError] = useState<string | null>(null);
   const [message, setMessage] = useState('准备进入星尘迷阵');
   const [showRules, setShowRules] = useState(false);
+  const [showCancelConfirm, setShowCancelConfirm] = useState(false);
   const [lastOutcome, setLastOutcome] = useState<RogueliteOutcomeView | null>(null);
   const submittingRef = useRef(false);
   const steppingRef = useRef(false);
@@ -386,7 +388,13 @@ export default function RoguelitePage() {
     }
   }, [fetchStatus]);
 
+  const confirmCancelGame = useCallback(async () => {
+    await cancelGame();
+    setShowCancelConfirm(false);
+  }, [cancelGame]);
+
   const stepGame = useCallback(async (action: RogueliteAction) => {
+    if (showCancelConfirm) return;
     if (!session || steppingRef.current) return;
     steppingRef.current = true;
     setLoading(true);
@@ -427,9 +435,9 @@ export default function RoguelitePage() {
       steppingRef.current = false;
       setLoading(false);
     }
-  }, [fetchStatus, session]);
+  }, [fetchStatus, session, showCancelConfirm]);
 
-  const canMove = state?.status === 'playing' && !pending && !loading;
+  const canMove = state?.status === 'playing' && !pending && !showCancelConfirm && !loading;
 
   const sortedBoard = useMemo(() => {
     return [...(state?.board ?? [])]
@@ -450,6 +458,7 @@ export default function RoguelitePage() {
   }, [player, state]);
 
   return (
+    <>
     <div className="rogue-page">
       <div className="rogue-mesh-bg" aria-hidden />
       <div className="rogue-stardust" aria-hidden>
@@ -502,11 +511,11 @@ export default function RoguelitePage() {
         <StatusDock
           player={player}
           phase={phase}
-          loading={loading}
+          loading={loading || showCancelConfirm}
           status={status}
           canEscape={Boolean(state?.status === 'playing' && state.starGate?.endlessUnlocked && !state.pending)}
           onStart={() => void startGame()}
-          onCancel={() => void cancelGame()}
+          onCancel={() => setShowCancelConfirm(true)}
           onEscape={() => void stepGame({ type: 'escape' })}
         />
 
@@ -576,6 +585,8 @@ export default function RoguelitePage() {
                     alt=""
                     fill
                     sizes="(max-width: 768px) 100vw, 680px"
+                    priority
+                    decoding="async"
                     className="object-cover opacity-95"
                     aria-hidden
                   />
@@ -616,6 +627,7 @@ export default function RoguelitePage() {
                               width={112}
                               height={112}
                               sizes="112px"
+                              decoding="async"
                               className={`pointer-events-none absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 object-contain drop-shadow-md ${cell.state === 'hidden' ? 'h-full w-full opacity-90 saturate-75' : 'h-[82%] w-[82%] opacity-100'}`}
                               aria-hidden
                             />
@@ -651,7 +663,7 @@ export default function RoguelitePage() {
           pending={state.pending}
           player={player}
           outcome={lastOutcome}
-          loading={loading}
+          loading={loading || showCancelConfirm}
           onAction={(action) => void stepGame(action)}
           onRecover={() => void fetchStatus()}
         />
@@ -660,7 +672,7 @@ export default function RoguelitePage() {
       {phase === 'playing' && state && session && state.status !== 'playing' && !state.pending && (
         <RogueliteOutcomeModal
           state={state}
-          loading={loading}
+          loading={loading || showCancelConfirm}
           onSubmit={() => void submitResult(session)}
         />
       )}
@@ -668,7 +680,7 @@ export default function RoguelitePage() {
       {phase === 'finished' && result && !session && (
         <RogueliteSettlementModal
           result={result}
-          loading={loading}
+          loading={loading || showCancelConfirm}
           status={status}
           onStart={() => void startGame()}
         />
@@ -1119,6 +1131,16 @@ export default function RoguelitePage() {
       `}</style>
       </main>
     </div>
+    <CancelConfirmModal
+      open={showCancelConfirm}
+      loading={loading}
+      title="确认放弃星尘迷阵？"
+      description="当前探索进度会被取消，本局不会进入结算。"
+      detail="已获得的星尘、钥匙、遗物和地图进度都会丢失。"
+      onConfirm={() => void confirmCancelGame()}
+      onClose={() => setShowCancelConfirm(false)}
+    />
+    </>
   );
 }
 

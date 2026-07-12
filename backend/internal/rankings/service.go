@@ -257,7 +257,7 @@ func (service *Service) AllGamesLeaderboard(ctx context.Context, period string, 
 		if len(options) > 0 {
 			selected := "all"
 			gameResult.SelectedDifficulty = &selected
-			gameResult.DifficultyOptions = append([]GameDifficultyOption{{Value: "all", Label: "全部难度"}}, options...)
+			gameResult.DifficultyOptions = append([]GameDifficultyOption{{Value: "all", Label: allDifficultyLabel(game)}}, options...)
 			gameResult.LeaderboardsByDifficulty = map[string][]GameEntry{"all": allRows}
 			for _, option := range options {
 				difficultyRows, err := service.gameLeaderboardRows(ctx, game, startTime, endTime, safeLimit, option.Value)
@@ -470,7 +470,8 @@ func (service *Service) gameLeaderboardRows(ctx context.Context, game gameDefini
 		     FROM game_records
 		    WHERE game_type = $1
 		      AND created_at >= $2
-		      AND created_at < $3`+whereDifficulty+`
+		      AND created_at < $3
+		      AND COALESCE(payload->>'pending', 'false') <> 'true'`+whereDifficulty+`
 		    GROUP BY user_id
 		 )
 		 SELECT u.id, u.username, u.display_name, p.display_name, p.avatar_url,

@@ -478,6 +478,22 @@
 	handle /api/games/2048/cancel {
 		reverse_proxy {$API_UPSTREAM:api:8080}
 	}
+	# 幸运塔防已覆盖前端实际调用的 status/start/checkpoint/submit/cancel，保持精确切流。
+	handle /api/games/lucky-td/status {
+		reverse_proxy {$API_UPSTREAM:api:8080}
+	}
+	handle /api/games/lucky-td/start {
+		reverse_proxy {$API_UPSTREAM:api:8080}
+	}
+	handle /api/games/lucky-td/checkpoint {
+		reverse_proxy {$API_UPSTREAM:api:8080}
+	}
+	handle /api/games/lucky-td/submit {
+		reverse_proxy {$API_UPSTREAM:api:8080}
+	}
+	handle /api/games/lucky-td/cancel {
+		reverse_proxy {$API_UPSTREAM:api:8080}
+	}
 
 	# 公开抽奖列表、详情与参与已迁移到 Go。
 	handle /api/projects {

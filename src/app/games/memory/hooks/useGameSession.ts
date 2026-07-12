@@ -9,6 +9,7 @@ import type {
   MemoryFlipResult,
   MemoryMove,
 } from '@/lib/types/game';
+import { fetchGameRequest, gameRequestErrorMessage } from '../../_lib/request';
 
 interface GameSession {
   sessionId: string;
@@ -64,7 +65,7 @@ export function useGameSession() {
 
   const fetchStatus = useCallback(async () => {
     try {
-      const res = await fetch('/api/games/memory/status');
+      const res = await fetchGameRequest('/api/games/memory/status');
       const data = await res.json();
       
       if (data.success) {
@@ -88,7 +89,7 @@ export function useGameSession() {
     setIsRestored(false);
     
     try {
-      const res = await fetch('/api/games/memory/start', {
+      const res = await fetchGameRequest('/api/games/memory/start', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ difficulty }),
@@ -116,7 +117,7 @@ export function useGameSession() {
     
     setLoading(true);
     try {
-      const res = await fetch('/api/games/memory/cancel', {
+      const res = await fetchGameRequest('/api/games/memory/cancel', {
         method: 'POST',
       });
       
@@ -151,7 +152,7 @@ export function useGameSession() {
     setLoading(true);
     
     try {
-      const res = await fetch('/api/games/memory/submit', {
+      const res = await fetchGameRequest('/api/games/memory/submit', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -175,9 +176,9 @@ export function useGameSession() {
       fetchStatus();
 
       return data.data;
-    } catch {
+    } catch (err) {
       hasSubmittedRef.current = false;
-      setError('网络错误');
+      setError(gameRequestErrorMessage(err, '结算请求超时，请检查网络后重试', '网络错误，请稍后重试'));
       return null;
     } finally {
       setLoading(false);
@@ -193,7 +194,7 @@ export function useGameSession() {
     cardIndex: number
   ): Promise<MemoryFlipResult | null> => {
     try {
-      const res = await fetch('/api/games/memory/flip', {
+      const res = await fetchGameRequest('/api/games/memory/flip', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ sessionId, cardIndex }),
@@ -241,11 +242,12 @@ export function useGameSession() {
       });
 
       return flipResult;
-    } catch {
-      setError('网络错误');
+    } catch (err) {
+      setError(gameRequestErrorMessage(err, '翻牌同步超时，正在恢复服务端进度', '网络错误，请稍后重试'));
+      await fetchStatus();
       return null;
     }
-  }, [setError]);
+  }, [fetchStatus, setError]);
 
   const syncSessionLayout = useCallback((sessionId: string, cardLayout: string[]) => {
     setSession((prev) => {

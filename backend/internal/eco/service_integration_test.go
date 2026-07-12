@@ -570,6 +570,139 @@ func TestProcessTheftInvestigationsReschedulesWhenNotCaught(t *testing.T) {
 	}
 }
 
+func TestProcessTheftInvestigationsRepeatTheftLowersInitialCatchRate(t *testing.T) {
+	ctx := context.Background()
+	service, db, cleanup := newEcoIntegrationService(t, ctx)
+	defer cleanup()
+	ownerID := int64(99651)
+	thiefID := int64(99652)
+	cleanupEcoTheftInvestigationFixtures(t, ctx, db)
+	defer cleanupEcoTheftInvestigationFixtures(t, ctx, db)
+	nowMs := testChinaDateMs(2026, 6, 23) + int64(2*time.Hour/time.Millisecond)
+	stolenAtMs := nowMs - int64(10*time.Minute/time.Millisecond)
+	nextCheckAtMs := nowMs - int64(time.Minute/time.Millisecond)
+	blackMarketAtMs := nowMs + int64(10*time.Hour/time.Millisecond)
+
+	previousRoll := ecoTheftInvestigationRollFloat
+	ecoTheftInvestigationRollFloat = func() float64 { return 0.18 }
+	defer func() { ecoTheftInvestigationRollFloat = previousRoll }()
+
+	seedEcoTheftInvestigationUsers(t, ctx, db, ownerID, thiefID, 0, 0, nowMs)
+	if _, err := db.Exec(ctx,
+		`INSERT INTO eco_thefts (
+		   id, prize_key, original_user_id, thief_user_id, public_entry_id,
+		   original_lot_id, thief_lot_id, stolen_at_ms, next_check_at_ms,
+		   black_market_available_at_ms, message, resolved_at_ms, outcome
+		 ) VALUES (
+		   'theft-99651-old', 'coin', $1, $2, 'public-99651',
+		   'owner-lot-old', 'thief-lot-old', $3 - 3600000, $3 - 1800000,
+		   $5, 'old message', $3 - 1200000, 'caught'
+		 ), (
+		   'theft-99651', 'coin', $1, $2, 'public-99651',
+		   'owner-lot-99651', 'thief-lot-99652', $3, $4, $5, 'message', NULL, NULL
+		 )`,
+		ownerID,
+		thiefID,
+		stolenAtMs,
+		nextCheckAtMs,
+		blackMarketAtMs,
+	); err != nil {
+		t.Fatalf("seed repeat theft failed: %v", err)
+	}
+
+	result, err := service.ProcessTheftInvestigations(ctx, 25, nowMs)
+	if err != nil {
+		t.Fatalf("process repeat theft failed: %v", err)
+	}
+	if result.Checked != 1 || result.Rescheduled != 1 || result.Caught != 0 || result.Escaped != 0 {
+		t.Fatalf("unexpected repeat theft result: %+v", result)
+	}
+
+	var nextCheck int64
+	if err := db.QueryRow(ctx, `SELECT next_check_at_ms FROM eco_thefts WHERE id = 'theft-99651'`).Scan(&nextCheck); err != nil {
+		t.Fatalf("query repeat theft failed: %v", err)
+	}
+	if nextCheck != nextCheckAtMs+theftCheckIntervalMS {
+		t.Fatalf("unexpected repeat theft next check: got %d want %d", nextCheck, nextCheckAtMs+theftCheckIntervalMS)
+	}
+}
+
+func TestEcoPublicBoardProtectsPrizeAfterCaughtTheft(t *testing.T) {
+	ctx := context.Background()
+	service, db, cleanup := newEcoIntegrationService(t, ctx)
+	defer cleanup()
+	ownerID := int64(99661)
+	viewerID := int64(99662)
+	cleanupEcoTheftInvestigationFixtures(t, ctx, db)
+	defer cleanupEcoTheftInvestigationFixtures(t, ctx, db)
+	nowMs := testChinaDateMs(2026, 6, 23) + int64(2*time.Hour/time.Millisecond)
+	resolvedAtMs := nowMs - int64(time.Hour/time.Millisecond)
+
+	seedEcoTheftInvestigationUsers(t, ctx, db, ownerID, viewerID, 0, 0, nowMs)
+	if _, err := db.Exec(ctx,
+		`INSERT INTO eco_prize_inventory
+		   (user_id, prize_key, inventory_count, limited_count, lifetime_claim_count)
+		 VALUES ($1, 'coin', 1, 0, 1)`,
+		ownerID,
+	); err != nil {
+		t.Fatalf("seed protected inventory failed: %v", err)
+	}
+	if _, err := db.Exec(ctx,
+		`INSERT INTO eco_prize_lots (
+		   id, user_id, prize_key, acquired_at_ms, available_at_ms, limited, source,
+		   public_entry_id, publicly_listed_at_ms, merchant_available_at_ms
+		 ) VALUES (
+		   'owner-lot-99661', $1, 'coin', $2, $2, false, 'restored',
+		   'public-99661', $2, $2
+		 )`,
+		ownerID,
+		nowMs,
+	); err != nil {
+		t.Fatalf("seed protected lot failed: %v", err)
+	}
+	if _, err := db.Exec(ctx,
+		`INSERT INTO eco_public_prizes (
+		   id, prize_key, owner_user_id, owner_name, owner_lot_id,
+		   public_at_ms, merchant_available_at_ms, status
+		 ) VALUES (
+		   'public-99661', 'coin', $1, 'owner', 'owner-lot-99661',
+		   $2, $2, 'listed'
+		 )`,
+		ownerID,
+		nowMs,
+	); err != nil {
+		t.Fatalf("seed protected public prize failed: %v", err)
+	}
+	if _, err := db.Exec(ctx,
+		`INSERT INTO eco_thefts (
+		   id, prize_key, original_user_id, thief_user_id, public_entry_id,
+		   original_lot_id, thief_lot_id, stolen_at_ms, next_check_at_ms,
+		   black_market_available_at_ms, message, resolved_at_ms, outcome
+		 ) VALUES (
+		   'theft-99661', 'coin', $1, $2, 'public-99661',
+		   'old-owner-lot', 'old-thief-lot', $3 - 3600000, $3 - 1800000,
+		   $3 + 86400000, 'message', $3, 'caught'
+		 )`,
+		ownerID,
+		viewerID,
+		resolvedAtMs,
+	); err != nil {
+		t.Fatalf("seed protected theft failed: %v", err)
+	}
+
+	status, err := service.GetStatus(ctx, viewerID, nowMs)
+	if err != nil {
+		t.Fatalf("get protected status failed: %v", err)
+	}
+	if len(status.PublicBoard.Entries) == 0 {
+		t.Fatalf("expected protected public entry")
+	}
+	entry := status.PublicBoard.Entries[0]
+	if entry.ID != "public-99661" || entry.CanSteal || entry.StealDisabledReason == nil || *entry.StealDisabledReason != "保护中" || entry.ProtectedUntil == nil || *entry.ProtectedUntil != resolvedAtMs+theftProtectionMS {
+		t.Fatalf("unexpected protected entry: %+v", entry)
+	}
+}
+
 func TestProcessTheftInvestigationsCatchesAndRestoresPrize(t *testing.T) {
 	ctx := context.Background()
 	service, db, cleanup := newEcoIntegrationService(t, ctx)
@@ -1045,7 +1178,7 @@ func seedEcoTheftInvestigationUsers(t *testing.T, ctx context.Context, db *pgxpo
 
 func cleanupEcoTheftInvestigationFixtures(t *testing.T, ctx context.Context, db *pgxpool.Pool) {
 	t.Helper()
-	for _, userID := range []int64{99621, 99622, 99631, 99632, 99641, 99642} {
+	for _, userID := range []int64{99621, 99622, 99631, 99632, 99641, 99642, 99651, 99652, 99661, 99662} {
 		cleanupEcoUser(t, ctx, db, userID)
 	}
 }

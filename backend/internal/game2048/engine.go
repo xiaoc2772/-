@@ -130,7 +130,7 @@ func Simulate(seed string, moves []Direction, maxMoves int) SimulationResult {
 		HighestTile:    highestTile,
 		MovesSubmitted: len(normalized),
 		MovesApplied:   movesApplied,
-		Won:            highestTile >= WinTile,
+		Won:            IsWinningScore(score),
 		GameOver:       IsGameOver(grid),
 	}
 }
@@ -165,6 +165,10 @@ func IsGameOver(grid Grid) bool {
 	return true
 }
 
+func IsWinningScore(score int64) bool {
+	return score >= WinScore
+}
+
 func CalculatePointReward(score int64, highestTile int) int64 {
 	if score < 0 {
 		score = 0
@@ -173,20 +177,36 @@ func CalculatePointReward(score int64, highestTile int) int64 {
 		highestTile = 0
 	}
 	base := score / RewardDivisor
-	milestoneBonus := int64(0)
+	milestoneBonus := calculateMilestoneBonus(highestTile)
+	return base + milestoneBonus
+}
+
+func calculateMilestoneBonus(highestTile int) int64 {
 	switch {
-	case highestTile >= 4096:
-		milestoneBonus = 140
-	case highestTile >= 2048:
-		milestoneBonus = 80
+	case highestTile >= WinTile:
+		bonus := int64(80)
+		nextStepBonus := int64(60)
+		for tile := WinTile * 2; tile <= minInt(highestTile, MaxTileValue); tile *= 2 {
+			bonus += nextStepBonus
+			nextStepBonus += 60
+		}
+		return bonus
 	case highestTile >= 1024:
-		milestoneBonus = 35
+		return 35
 	case highestTile >= 512:
-		milestoneBonus = 15
+		return 15
 	case highestTile >= 256:
-		milestoneBonus = 6
+		return 6
+	default:
+		return 0
 	}
-	return minInt64(MaxPointReward, base+milestoneBonus)
+}
+
+func minInt(left int, right int) int {
+	if left < right {
+		return left
+	}
+	return right
 }
 
 type cell struct {
@@ -336,11 +356,4 @@ func itoa(value int) string {
 		buffer[left], buffer[right] = buffer[right], buffer[left]
 	}
 	return string(buffer)
-}
-
-func minInt64(left int64, right int64) int64 {
-	if left < right {
-		return left
-	}
-	return right
 }

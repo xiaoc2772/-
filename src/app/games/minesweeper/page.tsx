@@ -31,6 +31,9 @@ import {
   type MinesweeperStateView,
 } from '@/lib/minesweeper-engine';
 import type { MinesweeperGameRecord, MinesweeperSessionView } from '@/lib/minesweeper-types';
+import { CancelConfirmModal } from '../_components/CancelConfirmModal';
+import { usePausedGameClock } from '../_hooks/usePausedGameClock';
+import { fetchGameRequest, gameRequestErrorMessage } from '../_lib/request';
 
 type Phase = 'ready' | 'playing' | 'finished';
 type ToolMode = 'reveal' | 'flag';
@@ -97,10 +100,10 @@ function formatSeconds(seconds: number): string {
   return `${String(min).padStart(2, '0')}:${String(sec).padStart(2, '0')}`;
 }
 
-function getSessionElapsedSeconds(session: MinesweeperSessionView, state: MinesweeperStateView | null): number {
+function getSessionElapsedSeconds(session: MinesweeperSessionView, state: MinesweeperStateView | null, now = Date.now()): number {
   const endAt = state?.status !== 'playing' && typeof state?.endedAt === 'number'
-    ? state.endedAt
-    : Date.now();
+    ? Math.min(state.endedAt, now)
+    : now;
   const duration = Math.max(0, endAt - session.startedAt);
   return state?.status === 'playing' ? Math.floor(duration / 1000) : Math.ceil(duration / 1000);
 }
@@ -226,12 +229,14 @@ export default function MinesweeperPage() {
   const [message, setMessage] = useState('选择难度开始扫雷');
   const [result, setResult] = useState<MinesweeperGameRecord | null>(null);
   const [showRules, setShowRules] = useState(false);
+  const [showCancelConfirm, setShowCancelConfirm] = useState(false);
   const submittingRef = useRef(false);
   const sessionRef = useRef<MinesweeperSessionView | null>(null);
   const stepQueueRef = useRef<MinesweeperAction[]>([]);
   const pendingCellActionsRef = useRef<Map<string, MinesweeperAction>>(new Map());
   const processingStepRef = useRef(false);
   const stepFlushTimerRef = useRef<number | null>(null);
+  const gameNow = usePausedGameClock(showCancelConfirm, session?.sessionId);
 
   const state = session?.state ?? null;
   const difficulties = status?.difficulties?.length
@@ -274,19 +279,19 @@ export default function MinesweeperPage() {
 
   const fetchStatus = useCallback(async () => {
     try {
-      const res = await fetch('/api/games/minesweeper/status');
+      const res = await fetchGameRequest('/api/games/minesweeper/status');
       const data = await parseJson<MinesweeperStatus>(res);
       if (!res.ok || !data?.success || !data.data) {
         throw new Error(data?.message ?? (res.status === 401 ? '请先登录后开始游戏' : '加载扫雷状态失败'));
       }
       setStatus(data.data);
       setError(null);
-      if (data.data.activeSession && !session) {
+      if (data.data.activeSession && (!session || session.sessionId === data.data.activeSession.sessionId)) {
         sessionRef.current = data.data.activeSession;
         setSession(data.data.activeSession);
         setSelectedDifficulty(data.data.activeSession.difficulty);
         setPhase('playing');
-        setMessage('已恢复正在进行的扫雷');
+        setMessage(session ? '已同步服务端雷区进度' : '已恢复正在进行的扫雷');
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : '网络错误，请稍后重试');
@@ -302,7 +307,7 @@ export default function MinesweeperPage() {
       setElapsedSeconds(0);
       return;
     }
-    const update = () => setElapsedSeconds(getSessionElapsedSeconds(session, state));
+    const update = () => setElapsedSeconds(getSessionElapsedSeconds(session, state, gameNow()));
     if (state?.status !== 'playing') {
       update();
       return;
@@ -310,7 +315,7 @@ export default function MinesweeperPage() {
     update();
     const timer = window.setInterval(update, 1000);
     return () => window.clearInterval(timer);
-  }, [phase, session, state]);
+  }, [gameNow, phase, session, state]);
 
   useEffect(() => {
     if (phase === 'playing' || !status?.inCooldown) return;
@@ -326,7 +331,7 @@ export default function MinesweeperPage() {
     setError(null);
     setResult(null);
     try {
-      const res = await fetch('/api/games/minesweeper/start', {
+      const res = await fetchGameRequest('/api/games/minesweeper/start', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ difficulty, restart }),
@@ -353,7 +358,7 @@ export default function MinesweeperPage() {
     setLoading(true);
     setError(null);
     try {
-      const res = await fetch('/api/games/minesweeper/cancel', { method: 'POST' });
+      const res = await fetchGameRequest('/api/games/minesweeper/cancel', { method: 'POST' });
       const data = await parseJson<unknown>(res);
       if (!res.ok || !data?.success) {
         throw new Error(data?.message ?? '取消游戏失败');
@@ -371,13 +376,18 @@ export default function MinesweeperPage() {
     }
   }, [clearStepQueue, fetchStatus]);
 
+  const confirmCancelGame = useCallback(async () => {
+    await cancelGame();
+    setShowCancelConfirm(false);
+  }, [cancelGame]);
+
   const submitResult = useCallback(async (targetSession: MinesweeperSessionView) => {
     if (submittingRef.current) return;
     submittingRef.current = true;
     setLoading(true);
     setError(null);
     try {
-      const res = await fetch('/api/games/minesweeper/submit', {
+      const res = await fetchGameRequest('/api/games/minesweeper/submit', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ sessionId: targetSession.sessionId }),
@@ -394,7 +404,7 @@ export default function MinesweeperPage() {
       setMessage(`本局获得 ${data.data.pointsEarned} 积分`);
       void fetchStatus();
     } catch (err) {
-      setError(err instanceof Error ? err.message : '结算失败，请稍后重试');
+      setError(gameRequestErrorMessage(err, '结算请求超时，请检查网络后重试', '结算失败，请稍后重试'));
     } finally {
       submittingRef.current = false;
       setLoading(false);
@@ -435,7 +445,7 @@ export default function MinesweeperPage() {
 
         syncPendingStepState();
         setError(null);
-        const res = await fetch('/api/games/minesweeper/step', {
+        const res = await fetchGameRequest('/api/games/minesweeper/step', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ sessionId: currentSession.sessionId, actions }),
@@ -467,14 +477,16 @@ export default function MinesweeperPage() {
     } catch (err) {
       stepQueueRef.current = [];
       pendingCellActionsRef.current.clear();
-      setError(err instanceof Error ? err.message : '操作失败，请稍后重试');
+      setError(gameRequestErrorMessage(err, '操作同步超时，正在恢复服务端进度', '操作失败，请稍后重试'));
+      await fetchStatus();
     } finally {
       processingStepRef.current = false;
       syncPendingStepState();
     }
-  }, [clearStepQueue, syncPendingStepState]);
+  }, [clearStepQueue, fetchStatus, syncPendingStepState]);
 
   const enqueueStep = useCallback((action: MinesweeperAction) => {
+    if (showCancelConfirm) return;
     const currentSession = sessionRef.current;
     if (!currentSession || !isQueuedStepUseful(currentSession.state, action)) return;
     const actionKey = stepPositionKey(action);
@@ -488,9 +500,10 @@ export default function MinesweeperPage() {
         void processStepQueue();
       }, STEP_BATCH_FLUSH_DELAY_MS);
     }
-  }, [processStepQueue, syncPendingStepState]);
+  }, [processStepQueue, showCancelConfirm, syncPendingStepState]);
 
   const handleCellClick = useCallback((cell: MinesweeperCellView) => {
+    if (showCancelConfirm) return;
     if (!state || state.status !== 'playing') return;
     if (mode === 'flag') {
       enqueueStep({ type: 'flag', position: { row: cell.row, col: cell.col } });
@@ -503,15 +516,16 @@ export default function MinesweeperPage() {
     if (cell.display === 'hidden') {
       enqueueStep({ type: 'reveal', position: { row: cell.row, col: cell.col } });
     }
-  }, [enqueueStep, mode, state]);
+  }, [enqueueStep, mode, showCancelConfirm, state]);
 
   const handleCellContextMenu = useCallback((event: MouseEvent<HTMLButtonElement>, cell: MinesweeperCellView) => {
     event.preventDefault();
+    if (showCancelConfirm) return;
     if (!state || state.status !== 'playing') return;
     if (cell.display === 'hidden' || cell.display === 'flagged') {
       enqueueStep({ type: 'flag', position: { row: cell.row, col: cell.col } });
     }
-  }, [enqueueStep, state]);
+  }, [enqueueStep, showCancelConfirm, state]);
 
   const boardMinWidth = state ? Math.max(288, state.cols * 32) : 288;
   const phaseLabel = phase === 'playing' ? '扫雷指令' : phase === 'finished' ? '本局结算' : '出发准备';
@@ -570,7 +584,7 @@ export default function MinesweeperPage() {
             </button>
             {session && (
               <button
-                onClick={cancelGame}
+                onClick={() => setShowCancelConfirm(true)}
                 disabled={loading || pendingStepCount > 0}
                 className="inline-flex flex-none items-center justify-center gap-1.5 rounded-full border border-rose-200 bg-white px-4 py-2 text-sm font-bold text-rose-700 transition-colors hover:bg-rose-50 disabled:opacity-50"
                 type="button"
@@ -695,6 +709,7 @@ export default function MinesweeperPage() {
                 <div className="mine-tool-switch">
                   <button
                     onClick={() => setMode('reveal')}
+                    disabled={showCancelConfirm}
                     className={`mine-tool-button inline-flex items-center gap-2 rounded-xl px-3 py-2 text-xs font-black transition ${mode === 'reveal' ? 'bg-white text-emerald-700 shadow-sm' : 'text-slate-500 hover:text-slate-800'}`}
                   >
                     <MousePointer2 className="h-4 w-4" />
@@ -702,6 +717,7 @@ export default function MinesweeperPage() {
                   </button>
                   <button
                     onClick={() => setMode('flag')}
+                    disabled={showCancelConfirm}
                     className={`mine-tool-button inline-flex items-center gap-2 rounded-xl px-3 py-2 text-xs font-black transition ${mode === 'flag' ? 'bg-white text-rose-700 shadow-sm' : 'text-slate-500 hover:text-slate-800'}`}
                   >
                     <Flag className="h-4 w-4" />
@@ -728,7 +744,7 @@ export default function MinesweeperPage() {
                         key={`${cell.row}-${cell.col}`}
                         onClick={() => handleCellClick(cell)}
                         onContextMenu={(event) => handleCellContextMenu(event, cell)}
-                        disabled={state.status !== 'playing' || cell.display === 'mine' || cell.display === 'exploded'}
+                        disabled={showCancelConfirm || state.status !== 'playing' || cell.display === 'mine' || cell.display === 'exploded'}
                         className={pendingCellClass(visibleCell, pendingAction)}
                         aria-label={`第 ${cell.row + 1} 行第 ${cell.col + 1} 列`}
                       >
@@ -780,6 +796,15 @@ export default function MinesweeperPage() {
         )}
 
         {showRules && <RulesModal onClose={() => setShowRules(false)} />}
+        <CancelConfirmModal
+          open={showCancelConfirm}
+          loading={loading || pendingStepCount > 0}
+          title="确认放弃扫雷？"
+          description="当前雷区进度会被取消，本局不会进入结算。"
+          detail="已翻开的格子、旗帜标记和本局用时都会丢失。"
+          onConfirm={() => void confirmCancelGame()}
+          onClose={() => setShowCancelConfirm(false)}
+        />
       </main>
 
       <style jsx global>{`

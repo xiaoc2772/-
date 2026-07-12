@@ -196,6 +196,7 @@ export interface EcoPublicBoardView {
     status: EcoPublicPrizeEntry['status'];
     canSteal?: boolean;
     stealDisabledReason?: string | null;
+    protectedUntil?: number | null;
     thiefUserId?: number | null;
     thiefName?: string | null;
     thiefAvatarUrl?: string | null;

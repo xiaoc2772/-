@@ -40,17 +40,27 @@ func TestSummarizeGameRowsMatchesWinRules(t *testing.T) {
 		t.Fatalf("unexpected whack mole progress: %+v", whackProgress)
 	}
 
-	game2048Win, _ := json.Marshal(map[string]any{"won": true})
-	game2048Loss, _ := json.Marshal(map[string]any{"won": false})
 	game2048Progress := summarizeGameRows([]gameRecordRow{
-		{Score: 2048, PointsEarned: 96, Payload: game2048Win},
-		{Score: 512, PointsEarned: 40, Payload: game2048Loss},
+		{Score: 20000, PointsEarned: 96},
+		{Score: 19999, PointsEarned: 40},
 	}, "game_2048")
 	if game2048Progress.Wins != 1 || game2048Progress.BestWinStreak != 1 {
 		t.Fatalf("unexpected 2048 progress: %+v", game2048Progress)
 	}
-	if game2048Progress.BestScore != 2048 || game2048Progress.TotalPointsEarned != 136 {
+	if game2048Progress.BestScore != 20000 || game2048Progress.TotalPointsEarned != 136 {
 		t.Fatalf("unexpected 2048 score summary: %+v", game2048Progress)
+	}
+
+	luckyWin, _ := json.Marshal(map[string]any{"won": true, "status": 1, "wavesCleared": 30})
+	luckyLegacyWin, _ := json.Marshal(map[string]any{"status": 1, "wavesCleared": 30})
+	luckyLoss, _ := json.Marshal(map[string]any{"won": false, "status": 2, "wavesCleared": 29})
+	luckyProgress := summarizeGameRows([]gameRecordRow{
+		{Score: 600, Payload: luckyWin},
+		{Score: 700, Payload: luckyLegacyWin},
+		{Score: 800, Payload: luckyLoss},
+	}, "lucky_td")
+	if luckyProgress.Wins != 2 || luckyProgress.BestWinStreak != 2 {
+		t.Fatalf("unexpected lucky td progress: %+v", luckyProgress)
 	}
 }
 

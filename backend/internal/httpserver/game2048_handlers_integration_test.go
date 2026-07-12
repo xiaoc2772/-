@@ -259,6 +259,68 @@ func TestGame2048HTTPCheckpointRenewsSessionExpiry(t *testing.T) {
 	}
 }
 
+func TestGame2048HTTPStatusReportsSharedDailyPointLimit(t *testing.T) {
+	ctx := context.Background()
+	databaseURL := os.Getenv("TEST_DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("TEST_DATABASE_URL 未设置，跳过 PostgreSQL 集成测试")
+	}
+
+	db, err := dbpostgres.Open(ctx, databaseURL)
+	if err != nil {
+		t.Fatalf("open postgres failed: %v", err)
+	}
+	defer db.Close()
+
+	if _, err := pgmigration.NewRunner(db, httpMigrationsDir(t)).Apply(ctx, false); err != nil {
+		t.Fatalf("apply migrations failed: %v", err)
+	}
+
+	resetInMemoryRateLimitsForTest()
+	userID := int64(82048 + time.Now().UnixNano()%1_000_000_000)
+	cleanupHTTPTestGame2048User(t, ctx, db, userID)
+	defer cleanupHTTPTestGame2048User(t, ctx, db, userID)
+
+	handler := New(Dependencies{
+		Config: config.Config{SessionSecret: testSessionSecret},
+		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+		DB:     db,
+	})
+
+	initialStatus := performGame2048JSONRequest(handler, userID, http.MethodGet, "/api/games/2048/status", "")
+	if initialStatus.Code != http.StatusOK {
+		t.Fatalf("expected initial status 200, got %d body=%s", initialStatus.Code, initialStatus.Body.String())
+	}
+
+	statDate := time.Now().UTC().Add(8 * time.Hour).Format("2006-01-02")
+	if _, err := db.Exec(ctx,
+		`INSERT INTO daily_game_points (user_id, stat_date, earned_points, updated_at)
+		 VALUES ($1, $2, $3, now())
+		 ON CONFLICT (user_id, stat_date) DO UPDATE SET earned_points = excluded.earned_points, updated_at = now()`,
+		userID, statDate, int64(5000),
+	); err != nil {
+		t.Fatalf("seed daily_game_points failed: %v", err)
+	}
+
+	statusResponse := performGame2048JSONRequest(handler, userID, http.MethodGet, "/api/games/2048/status", "")
+	if statusResponse.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d body=%s", statusResponse.Code, statusResponse.Body.String())
+	}
+	var statusPayload struct {
+		Success bool `json:"success"`
+		Data    struct {
+			DailyLimit         int64 `json:"dailyLimit"`
+			PointsLimitReached bool  `json:"pointsLimitReached"`
+		} `json:"data"`
+	}
+	if err := json.NewDecoder(statusResponse.Body).Decode(&statusPayload); err != nil {
+		t.Fatalf("decode status response failed: %v", err)
+	}
+	if !statusPayload.Success || statusPayload.Data.DailyLimit != 5000 || !statusPayload.Data.PointsLimitReached {
+		t.Fatalf("status should report shared daily point limit reached, payload=%+v", statusPayload)
+	}
+}
+
 func performGame2048JSONRequest(handler http.Handler, userID int64, method string, path string, body string) *httptest.ResponseRecorder {
 	request := httptest.NewRequest(method, path, bytes.NewBufferString(body))
 	request.Host = "example.com"

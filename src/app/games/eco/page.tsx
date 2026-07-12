@@ -860,7 +860,7 @@ export default function EcoPage() {
             <span className="eco-user-av">
               {topUser?.avatarUrl ? (
                 // eslint-disable-next-line @next/next/no-img-element
-                <img src={topUser.avatarUrl} alt={topUser.name} />
+                <img src={topUser.avatarUrl} alt={topUser.name} decoding="async" />
               ) : initial}
             </span>
             <span className="eco-user-meta">
@@ -932,7 +932,7 @@ export default function EcoPage() {
                     title={`拾取${item.name}`}
                   >
                     {/* eslint-disable-next-line @next/next/no-img-element */}
-                    <img src={item.imageSrc} alt={item.name} draggable={false} />
+                    <img src={item.imageSrc} alt={item.name} draggable={false} decoding="async" />
                   </button>
                 );
               }
@@ -945,6 +945,7 @@ export default function EcoPage() {
                   className="trash"
                   style={{ left: `${item.x}%`, top: `${item.y}%`, ['--rot' as string]: `${item.rot}deg` }}
                   draggable={false}
+                  decoding="async"
                   onPointerDown={(e) => onPointerDown(e, item)}
                 />
               );
@@ -958,6 +959,7 @@ export default function EcoPage() {
                 className="trash is-dragging"
                 style={{ left: drag.x, top: drag.y }}
                 draggable={false}
+                decoding="async"
               />
             )}
 
@@ -967,7 +969,7 @@ export default function EcoPage() {
 
             <div ref={binRef} className={`bin ${binActive ? 'is-active' : ''}`}>
               {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img src={binActive ? BIN_OPEN : BIN_CLOSED} alt="回收桶" draggable={false} className={binEat ? 'eat' : ''} key={binEat} />
+              <img src={binActive ? BIN_OPEN : BIN_CLOSED} alt="回收桶" draggable={false} className={binEat ? 'eat' : ''} key={binEat} decoding="async" />
               <span className="bin-base" />
               <span className="bin-hint">投放点</span>
             </div>
@@ -1065,7 +1067,7 @@ export default function EcoPage() {
                     <span className="public-entry-avatar public-entry-avatar-nav eco-user-av" aria-hidden>
                       {ownerAvatarUrl ? (
                         // eslint-disable-next-line @next/next/no-img-element
-                        <img src={ownerAvatarUrl} alt="" />
+                        <img src={ownerAvatarUrl} alt="" decoding="async" />
                       ) : ownerInitial}
                     </span>
                     <div>
@@ -1231,14 +1233,15 @@ export default function EcoPage() {
                 <span className="rule-icon">🚓</span>
                 <div>
                   <h3>警察追查</h3>
-                  <p>偷盗后警察会由系统后台自动追查，不需要玩家挂机。初始抓捕概率 10%，每过 1 小时增加 3%，每半小时检查一次。</p>
+                  <p>偷盗后警察会由系统后台自动追查，不需要玩家挂机。偷走后 20 分钟开始第一次追查，之后每 20 分钟追查一次，直到 24 小时时间到为止。</p>
                 </div>
               </article>
               <article className="rule-card">
                 <span className="rule-icon">⚖️</span>
                 <div>
                   <h3>抓捕结果</h3>
-                  <p>被抓后奖品物归原主，小偷扣除当天售价 10% 的积分并强制佩戴“小偷”成就 10 小时，原主获得扣分的一半。</p>
+                  <p>第一次被偷的初始抓捕概率为 22%，每过 1 小时增加 2%。如果同一奖品再次被偷，每次初始概率再降低 5%。</p>
+                  <p>被抓后奖品物归原主并回到公开栏展示，同时获得 10 小时保护期；保护期内不能再次被偷。小偷扣除当天售价 10% 的积分并强制佩戴“小偷”成就 10 小时，原主获得扣分的一半。</p>
                 </div>
               </article>
               <article className="rule-card">
@@ -1294,7 +1297,7 @@ export default function EcoPage() {
             <div className="choice-prize">
               <span className="sc-prize-img">
                 {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img src={pendingClaimItem.imageSrc} alt={pendingClaimItem.name} draggable={false} />
+                <img src={pendingClaimItem.imageSrc} alt={pendingClaimItem.name} draggable={false} decoding="async" />
               </span>
               <div>
                 <h3>{pendingClaimItem.name}</h3>
@@ -1352,7 +1355,7 @@ export default function EcoPage() {
             <div className="choice-prize">
               <span className="sc-prize-img">
                 {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img src={pendingStealEntry.imageSrc} alt={pendingStealEntry.name} draggable={false} />
+                <img src={pendingStealEntry.imageSrc} alt={pendingStealEntry.name} draggable={false} decoding="async" />
               </span>
               <div>
                 <h3>{pendingStealEntry.name}</h3>
@@ -1503,7 +1506,7 @@ export default function EcoPage() {
                   <div className="price-focus-top">
                     <span className="sc-prize-img">
                       {/* eslint-disable-next-line @next/next/no-img-element */}
-                      <img src={selectedPricePrize.imageSrc} alt={selectedPricePrize.name} draggable={false} />
+                      <img src={selectedPricePrize.imageSrc} alt={selectedPricePrize.name} draggable={false} decoding="async" />
                     </span>
                     <div className="price-focus-main">
                       <h4>{selectedPricePrize.name}</h4>
@@ -1583,7 +1586,7 @@ export default function EcoPage() {
                       <div className="sc-top">
                         <span className="sc-prize-img">
                           {/* eslint-disable-next-line @next/next/no-img-element */}
-                          <img src={prize.imageSrc} alt={prize.name} draggable={false} />
+                          <img src={prize.imageSrc} alt={prize.name} draggable={false} decoding="async" />
                         </span>
                         <div className="sc-meta">
                           <h3>{prize.name}</h3>

@@ -26,6 +26,8 @@
     "cleanup:package-cloudflare:dry-run": "node scripts/plan-package-cloudflare-cleanup.mjs",
     "test:package-cloudflare-cleanup-guards": "node scripts/test-package-cloudflare-cleanup-guards.mjs",
     "test:watch": "vitest",
+    "check:lucky-td-config-sync": "node scripts/check-lucky-td-config-sync.mjs",
+    "audit:lucky-td-cutover": "node scripts/audit-lucky-td-cutover.mjs",
     "migrate:feedback-images": "node scripts/migrate-feedback-images-to-blob.mjs",
     "migrate:feedback-images:execute": "node scripts/migrate-feedback-images-to-blob.mjs --execute"
   },

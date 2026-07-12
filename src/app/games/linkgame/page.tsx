@@ -19,6 +19,7 @@ import { DifficultySelect } from './components/DifficultySelect';
 import { GameBoard } from './components/GameBoard';
 import { GameHeader } from './components/GameHeader';
 import { ResultModal } from './components/ResultModal';
+import { CancelConfirmModal } from '../_components/CancelConfirmModal';
 import { LINKGAME_DIFFICULTY_CONFIG } from './lib/constants';
 import {
   canMatchByConfig,
@@ -111,6 +112,7 @@ export default function LinkGamePage() {
   const [gameResult, setGameResult] = useState<GameResult | null>(null);
   const [pendingOutcome, setPendingOutcome] = useState<GameOutcome | null>(null);
   const [showRules, setShowRules] = useState(false);
+  const [showCancelConfirm, setShowCancelConfirm] = useState(false);
 
   const [board, setBoard] = useState<(string | null)[]>([]);
   const [selected, setSelected] = useState<number[]>([]);
@@ -266,7 +268,7 @@ export default function LinkGamePage() {
   }, [phase, pendingOutcome, handleSettleOutcome]);
 
   useEffect(() => {
-    if (phase !== 'playing') return;
+    if (phase !== 'playing' || showCancelConfirm) return;
     if (timerRef.current) return;
 
     timerRef.current = setInterval(() => {
@@ -293,7 +295,7 @@ export default function LinkGamePage() {
         timerRef.current = null;
       }
     };
-  }, [phase, handleGameOver]);
+  }, [phase, handleGameOver, showCancelConfirm]);
 
   useEffect(() => {
     if (phase !== 'playing' || !session || isProcessing || board.length === 0) return;
@@ -345,6 +347,7 @@ export default function LinkGamePage() {
   }, [session, phase, isRestored, applyFreshSession]);
 
   const handleTileClick = (index: number) => {
+    if (showCancelConfirm) return;
     if (!session || isProcessing) return;
 
     const tile = board[index];
@@ -470,6 +473,11 @@ export default function LinkGamePage() {
     }
   };
 
+  const confirmCancelGame = async () => {
+    await handleCancel();
+    setShowCancelConfirm(false);
+  };
+
   const handlePlayAgain = async () => {
     setGameResult(null);
     setPendingOutcome(null);
@@ -551,7 +559,7 @@ export default function LinkGamePage() {
             </button>
             {phase === 'playing' && (
               <button
-                onClick={handleCancel}
+                onClick={() => setShowCancelConfirm(true)}
                 disabled={loading || isProcessing}
                 className="inline-flex flex-none items-center justify-center gap-1.5 rounded-full border border-rose-200 bg-white px-4 py-2 text-sm font-bold text-rose-700 transition-colors hover:bg-rose-50 disabled:opacity-50"
                 type="button"
@@ -675,6 +683,16 @@ export default function LinkGamePage() {
           />
         )}
       </main>
+
+      <CancelConfirmModal
+        open={showCancelConfirm}
+        loading={loading || isProcessing}
+        title="确认放弃连连看？"
+        description="当前连线进度会被取消，本局不会进入结算。"
+        detail="已消除的卡牌、连线步数和剩余时间都会丢失。"
+        onConfirm={() => void confirmCancelGame()}
+        onClose={() => setShowCancelConfirm(false)}
+      />
 
       {showRules && (
         <div className="link-modal-overlay" role="dialog" aria-modal="true" aria-labelledby="linkgame-rules-title">

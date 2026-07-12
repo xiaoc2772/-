@@ -299,7 +299,14 @@ export default function BrowserCompatibility() {
     detectWebpSupport();
 
     const viewport = window.visualViewport;
-    const onViewportChange = () => updateViewportVars();
+    let viewportFrame: number | null = null;
+    const onViewportChange = () => {
+      if (viewportFrame !== null) return;
+      viewportFrame = window.requestAnimationFrame(() => {
+        viewportFrame = null;
+        updateViewportVars();
+      });
+    };
 
     window.addEventListener("resize", onViewportChange, { passive: true });
     window.addEventListener("orientationchange", onViewportChange, { passive: true });
@@ -311,6 +318,9 @@ export default function BrowserCompatibility() {
       window.removeEventListener("orientationchange", onViewportChange);
       viewport?.removeEventListener("resize", onViewportChange);
       viewport?.removeEventListener("scroll", onViewportChange);
+      if (viewportFrame !== null) {
+        window.cancelAnimationFrame(viewportFrame);
+      }
     };
   }, []);
 

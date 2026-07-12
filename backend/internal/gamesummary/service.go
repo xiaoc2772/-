@@ -16,7 +16,12 @@ import (
 
 var ErrUnavailable = errors.New("game summary database unavailable")
 
-const recordFetchLimit = 50
+const (
+	recordFetchLimit = 50
+	game2048WinScore = int64(20000)
+	luckyTdWinScore  = int64(600)
+	luckyTdWinWaves  = int64(30)
+)
 
 var supportedGames = []string{
 	"roguelite",
@@ -26,6 +31,7 @@ var supportedGames = []string{
 	"match3",
 	"linkgame",
 	"game_2048",
+	"lucky_td",
 }
 
 type Service struct {
@@ -178,7 +184,8 @@ func (service *Service) listRecentGameRows(ctx context.Context, userID int64) (m
 		          ROW_NUMBER() OVER (PARTITION BY game_type ORDER BY created_at DESC, id DESC) AS rn
 		     FROM game_records
 		    WHERE user_id = $1
-		      AND game_type IN ('roguelite', 'minesweeper', 'whack_mole', 'memory', 'match3', 'linkgame', 'game_2048')
+		      AND game_type IN ('roguelite', 'minesweeper', 'whack_mole', 'memory', 'match3', 'linkgame', 'game_2048', 'lucky_td')
+		      AND COALESCE((payload->>'pending')::boolean, false) = false
 		 )
 		 SELECT game_type, difficulty, score, points_earned, payload
 		   FROM recent
@@ -234,7 +241,14 @@ func rowWon(row gameRecordRow, gameType string) bool {
 	case "minesweeper", "roguelite":
 		return boolField(data, "won")
 	case "game_2048":
-		return boolField(data, "won")
+		return row.Score >= game2048WinScore
+	case "lucky_td":
+		if won, ok := data["won"].(bool); ok {
+			return won
+		}
+		return numericField(data, "status") == 1 &&
+			numericField(data, "wavesCleared") >= luckyTdWinWaves &&
+			row.Score >= luckyTdWinScore
 	case "match3":
 		return row.Score >= 1200
 	case "whack_mole":
@@ -267,7 +281,21 @@ func toAPIKey(gameType string) string {
 	if gameType == "game_2048" {
 		return "2048"
 	}
+	if gameType == "lucky_td" {
+		return "lucky-td"
+	}
 	return gameType
+}
+
+func numericField(data map[string]any, key string) int64 {
+	switch value := data[key].(type) {
+	case float64:
+		return int64(value)
+	case int64:
+		return value
+	default:
+		return 0
+	}
 }
 
 func stringPtr(value string) *string {
