@@ -32,6 +32,7 @@ var supportedGames = []string{
 	"linkgame",
 	"game_2048",
 	"lucky_td",
+	"piano_tiles",
 }
 
 type Service struct {
@@ -184,7 +185,7 @@ func (service *Service) listRecentGameRows(ctx context.Context, userID int64) (m
 		          ROW_NUMBER() OVER (PARTITION BY game_type ORDER BY created_at DESC, id DESC) AS rn
 		     FROM game_records
 		    WHERE user_id = $1
-		      AND game_type IN ('roguelite', 'minesweeper', 'whack_mole', 'memory', 'match3', 'linkgame', 'game_2048', 'lucky_td')
+		      AND game_type IN ('roguelite', 'minesweeper', 'whack_mole', 'memory', 'match3', 'linkgame', 'game_2048', 'lucky_td', 'piano_tiles')
 		      AND COALESCE((payload->>'pending')::boolean, false) = false
 		 )
 		 SELECT game_type, difficulty, score, points_earned, payload
@@ -249,6 +250,19 @@ func rowWon(row gameRecordRow, gameType string) bool {
 		return numericField(data, "status") == 1 &&
 			numericField(data, "wavesCleared") >= luckyTdWinWaves &&
 			row.Score >= luckyTdWinScore
+	case "piano_tiles":
+		mode, _ := data["mode"].(string)
+		if mode == "" {
+			mode = row.Difficulty
+		}
+		if mode == "rush" {
+			// 限时冲刺必须完整跑满 60 秒，并且至少完成一次有效命中。
+			// 服务端结算时会重放事件，因此这里只消费已验证的结果字段。
+			return stringField(data, "status") == "timeup" &&
+				numericField(data, "playedMs") >= 60000 &&
+				row.Score > 0
+		}
+		return mode == "classic" && numericField(data, "crowns") >= 1
 	case "match3":
 		return row.Score >= 1200
 	case "whack_mole":
@@ -284,6 +298,9 @@ func toAPIKey(gameType string) string {
 	if gameType == "lucky_td" {
 		return "lucky-td"
 	}
+	if gameType == "piano_tiles" {
+		return "piano-tiles"
+	}
 	return gameType
 }
 
@@ -296,6 +313,11 @@ func numericField(data map[string]any, key string) int64 {
 	default:
 		return 0
 	}
+}
+
+func stringField(data map[string]any, key string) string {
+	value, _ := data[key].(string)
+	return value
 }
 
 func stringPtr(value string) *string {

@@ -438,23 +438,23 @@ func enemyHpPermyriad(data *EngineData, typeIdx, waveIndex, tier int) int {
 	if typeIdx == data.CoinEnemyIdx {
 		return 10000
 	}
-	value := 8700 + max(0, waveIndex-4)*240 + tier*240
+	value := 8500 + max(0, waveIndex-4)*170 + tier*180
 	if waveIndex <= 1 {
-		value = 7000
+		value = 6800
 	} else if waveIndex == 2 {
-		value = 8000
+		value = 7800
 	}
 	switch enemyID(data, typeIdx) {
 	case "boss":
-		value += 450 + tier*200
+		value += 400 + tier*160
 	case "golem":
-		value += 260 + tier*120
+		value += 230 + tier*100
 	case "puppet":
-		value += 150 + tier*100
+		value += 130 + tier*80
 	case "drone":
-		value -= 600
+		value -= 550
 	case "wolf":
-		value -= 250
+		value -= 220
 	}
 	return value
 }
@@ -463,17 +463,17 @@ func enemyAtkPermyriad(data *EngineData, typeIdx, waveIndex, tier int) int {
 	if typeIdx == data.CoinEnemyIdx {
 		return 10000
 	}
-	value := 8500 + max(0, waveIndex-3)*280 + tier*170
+	value := 8300 + max(0, waveIndex-3)*200 + tier*130
 	if waveIndex <= 1 {
-		value = 6700
+		value = 6400
 	} else if waveIndex == 2 {
-		value = 7800
+		value = 7400
 	}
 	switch enemyID(data, typeIdx) {
 	case "boss":
-		value += 400 + tier*150
+		value += 320 + tier*110
 	case "wolf":
-		value += 80
+		value += 60
 	case "drone":
 		value -= 150
 	}
@@ -484,17 +484,17 @@ func enemySpeedPermyriad(data *EngineData, typeIdx, waveIndex, tier int) int {
 	if typeIdx == data.CoinEnemyIdx {
 		return 10000
 	}
-	value := 9500 + max(0, waveIndex-4)*130 + tier*110
+	value := 9400 + max(0, waveIndex-4)*90 + tier*80
 	if waveIndex <= 1 {
-		value = 8300
+		value = 8100
 	} else if waveIndex == 2 {
-		value = 9100
+		value = 8900
 	}
 	switch enemyID(data, typeIdx) {
 	case "wolf":
-		value += 1200 + tier*180
+		value += 1080 + tier*140
 	case "drone":
-		value += 600 + tier*120
+		value += 540 + tier*90
 	case "golem":
 		value -= 900
 	case "boss":
@@ -507,14 +507,14 @@ func enemyAttackSpeedPermyriad(data *EngineData, typeIdx, waveIndex, tier int) i
 	if typeIdx == data.CoinEnemyIdx {
 		return 10000
 	}
-	value := 10000 + max(0, waveIndex-5)*160 + tier*130
+	value := 9900 + max(0, waveIndex-5)*110 + tier*90
 	switch enemyID(data, typeIdx) {
 	case "wolf":
-		value += 300
+		value += 260
 	case "drone":
-		value += 180
+		value += 150
 	case "boss":
-		value += 300
+		value += 250
 	}
 	return value
 }
@@ -524,9 +524,9 @@ func enemyDefValue(data *EngineData, typeIdx, waveIndex, tier int) int {
 	if typeIdx == data.CoinEnemyIdx {
 		return cfg.Def
 	}
-	value := cfg.Def + max(0, waveIndex-5)*6 + tier*14
+	value := cfg.Def + max(0, waveIndex-5)*4 + tier*9
 	if enemyID(data, typeIdx) == "golem" {
-		value += 20 + tier*14
+		value += 16 + tier*10
 	}
 	return value
 }
@@ -536,14 +536,14 @@ func enemyResValue(data *EngineData, typeIdx, waveIndex, tier int) int {
 	if typeIdx == data.CoinEnemyIdx {
 		return cfg.Res
 	}
-	value := cfg.Res + max(0, waveIndex-7)*80 + tier*170
+	value := cfg.Res + max(0, waveIndex-7)*50 + tier*115
 	switch enemyID(data, typeIdx) {
 	case "puppet":
-		value += 350 + tier*160
+		value += 280 + tier*115
 	case "boss":
-		value += 220 + tier*100
+		value += 180 + tier*75
 	}
-	return min(7000, value)
+	return min(6500, value)
 }
 
 func okResult() ActionResult {
@@ -696,6 +696,21 @@ func applyDeploy(data *EngineData, state *GameState, action GameAction) ActionRe
 		MaxHP:   maxHP,
 	})
 	state.ActiveSkillCooldown[typeIdx] = activeSkillCooldownFor(typeIdx, state.ActiveSkillLevels[typeIdx])
+	// 落位挤压：判定箱（半格 500）覆盖该格的地面敌人被推退半格，并解除阻挡待重新判定
+	for i := range state.Enemies {
+		enemy := &state.Enemies[i]
+		if enemy.HP == 0 || !data.Config.Enemies[enemy.TypeIdx].Blockable {
+			continue
+		}
+		path := enemyPath(data, state, enemy)
+		for _, cell := range path.Cells {
+			if cell.Row == row && cell.Col == col && absInt(enemy.Progress-cell.CenterProgress) < 500 {
+				enemy.Progress = max(0, enemy.Progress-500)
+				enemy.BlockedBy = 0
+				break
+			}
+		}
+	}
 	return okResult()
 }
 
@@ -1489,9 +1504,9 @@ func spawnEnemy(data *EngineData, state *GameState, typeIdx, pathIdx int) {
 	shield := 0
 	switch enemyID(data, typeIdx) {
 	case "puppet":
-		shield = pm(hp, 900+tier*220+max(0, state.WaveIndex-8)*50)
+		shield = pm(hp, 720+tier*160+max(0, state.WaveIndex-8)*30)
 	case "boss":
-		shield = pm(hp, 300+tier*100)
+		shield = pm(hp, 250+tier*75)
 	}
 	for _, mechanic := range m.Cfg.Mechanics {
 		if typeIdx != data.CoinEnemyIdx && mechanic.EnemyShieldPermyriad > 0 {
@@ -1500,10 +1515,10 @@ func spawnEnemy(data *EngineData, state *GameState, typeIdx, pathIdx int) {
 	}
 	skillCooldown := enemySkillBaseCooldown(enemyID(data, typeIdx), tier)
 	dmgToBase := cfg.DmgToBase
-	if typeIdx != data.CoinEnemyIdx && state.WaveIndex >= 12 {
+	if typeIdx != data.CoinEnemyIdx && state.WaveIndex >= 16 {
 		dmgToBase++
 	}
-	if enemyID(data, typeIdx) == "boss" && state.WaveIndex >= 14 {
+	if enemyID(data, typeIdx) == "boss" && state.WaveIndex >= 22 {
 		dmgToBase++
 	}
 	def := enemyDefValue(data, typeIdx, state.WaveIndex, tier)
@@ -2033,12 +2048,33 @@ func enemyAct(data *EngineData, state *GameState, enemy *EnemyState) {
 	}
 	to := from + moveSpeed
 	if cfg.Blockable {
-		// 阻挡捕获：途经格 centerProgress ∈ (from, to]，按升序取第一个有空位的近战单位。
+		// 挤压碰撞：判定箱半格（500），不可越过同路径前方最近的地面敌人（同进度时 id 小者视为在前）
+		aheadProgress := -1
+		for i := range state.Enemies {
+			other := &state.Enemies[i]
+			if other.ID == enemy.ID || other.HP == 0 || other.PathIdx != enemy.PathIdx {
+				continue
+			}
+			if !data.Config.Enemies[other.TypeIdx].Blockable {
+				continue
+			}
+			if other.Progress > from || (other.Progress == from && other.ID < enemy.ID) {
+				if aheadProgress < 0 || other.Progress < aheadProgress {
+					aheadProgress = other.Progress
+				}
+			}
+		}
+		if aheadProgress >= 0 && to > aheadProgress-500 {
+			to = max(from, aheadProgress-500)
+		}
+		// 阻挡捕获：拦截点 = 近战单位所在格中心前一格（CenterProgress - 1000，下限 0）。
+		// 若敌人已处于拦截点与单位格中心之间（落位推退/贴脸出生），原地立即进入阻挡。
 		for _, cell := range path.Cells {
 			if cell.CenterProgress <= from {
 				continue
 			}
-			if cell.CenterProgress > to {
+			stop := max(0, cell.CenterProgress-1000)
+			if stop > to {
 				break
 			}
 			unit := findMeleeUnitAt(data, state, cell.Row, cell.Col)
@@ -2056,7 +2092,11 @@ func enemyAct(data *EngineData, state *GameState, enemy *EnemyState) {
 			if blockedCount >= blockLimit {
 				continue
 			}
-			enemy.Progress = cell.CenterProgress
+			if stop > from {
+				enemy.Progress = stop
+			} else {
+				enemy.Progress = from
+			}
 			enemy.BlockedBy = unit.ID
 			return
 		}

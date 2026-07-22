@@ -21,6 +21,7 @@ import {
   Target,
   Home,
   Hash,
+  Music,
   type LucideIcon,
 } from 'lucide-react';
 import type { PublicAchievement } from '@/lib/profile-achievements';
@@ -29,7 +30,7 @@ import type { PublicAchievement } from '@/lib/profile-achievements';
 // Game metadata
 // ──────────────────────────────────────────────────
 
-type GameKey = 'roguelite' | 'minesweeper' | 'whack-mole' | 'memory' | 'match3' | 'linkgame' | '2048' | 'lucky-td';
+type GameKey = 'roguelite' | 'minesweeper' | 'whack-mole' | 'memory' | 'match3' | 'linkgame' | '2048' | 'lucky-td' | 'piano-tiles';
 
 interface GameMeta {
   key: GameKey;
@@ -117,6 +118,15 @@ const GAMES: readonly GameMeta[] = [
     image: `${GAME_CARD_IMAGE_BASE}/covers/lucky-td.webp`,
     mascot: `${GAME_CARD_IMAGE_BASE}/mascots/lucky-td.webp`,
     href: '/games/lucky-td',
+  },
+  {
+    key: 'piano-tiles',
+    name: '钢琴块',
+    description: '点击下落音块演奏旋律，经典与限时双模式。',
+    Icon: Music,
+    image: `${GAME_CARD_IMAGE_BASE}/covers/piano-tiles-v2.webp`,
+    mascot: `${GAME_CARD_IMAGE_BASE}/mascots/piano-tiles-v2.webp`,
+    href: '/games/piano-tiles',
   },
 ] as const;
 

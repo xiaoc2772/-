@@ -245,27 +245,38 @@ func (service *Service) AllGamesLeaderboard(ctx context.Context, period string, 
 	games := make([]GameResult, 0, len(supportedGames))
 	overallMap := map[int64]*OverallEntry{}
 	for _, game := range supportedGames {
-		allRows, err := service.gameLeaderboardRows(ctx, game, startTime, endTime, safeLimit, "")
+		var gameResult GameResult
+		var err error
+		if game.dbName == "piano_tiles" {
+			// 钢琴块不能把不同歌曲的原始分数直接放在同一榜单；
+			// 独立聚合会按谱面星级和标准表现生成模式×星级榜。
+			gameResult, err = service.pianoTilesGameResult(ctx, startTime, endTime, safeLimit)
+		} else {
+			allRows, rowsErr := service.gameLeaderboardRows(ctx, game, startTime, endTime, safeLimit, "")
+			if rowsErr != nil {
+				return AllGamesResult{}, rowsErr
+			}
+			gameResult = GameResult{
+				GameType:    game.apiName,
+				Leaderboard: allRows,
+			}
+			options := difficultyOptions(game)
+			if len(options) > 0 {
+				selected := "all"
+				gameResult.SelectedDifficulty = &selected
+				gameResult.DifficultyOptions = append([]GameDifficultyOption{{Value: "all", Label: allDifficultyLabel(game)}}, options...)
+				gameResult.LeaderboardsByDifficulty = map[string][]GameEntry{"all": allRows}
+				for _, option := range options {
+					difficultyRows, rowsErr := service.gameLeaderboardRows(ctx, game, startTime, endTime, safeLimit, option.Value)
+					if rowsErr != nil {
+						return AllGamesResult{}, rowsErr
+					}
+					gameResult.LeaderboardsByDifficulty[option.Value] = difficultyRows
+				}
+			}
+		}
 		if err != nil {
 			return AllGamesResult{}, err
-		}
-		gameResult := GameResult{
-			GameType:    game.apiName,
-			Leaderboard: allRows,
-		}
-		options := difficultyOptions(game)
-		if len(options) > 0 {
-			selected := "all"
-			gameResult.SelectedDifficulty = &selected
-			gameResult.DifficultyOptions = append([]GameDifficultyOption{{Value: "all", Label: allDifficultyLabel(game)}}, options...)
-			gameResult.LeaderboardsByDifficulty = map[string][]GameEntry{"all": allRows}
-			for _, option := range options {
-				difficultyRows, err := service.gameLeaderboardRows(ctx, game, startTime, endTime, safeLimit, option.Value)
-				if err != nil {
-					return AllGamesResult{}, err
-				}
-				gameResult.LeaderboardsByDifficulty[option.Value] = difficultyRows
-			}
 		}
 		games = append(games, gameResult)
 

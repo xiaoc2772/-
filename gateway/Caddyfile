@@ -301,6 +301,25 @@
 	handle /api/games/minesweeper/cancel {
 		reverse_proxy {$API_UPSTREAM:api:8080}
 	}
+	# 钢琴块覆盖前端实际调用的 status/start/checkpoint/submit/cancel，submit 由 Go 服务端按事件重算积分。
+	handle /api/games/piano-tiles/status {
+		reverse_proxy {$API_UPSTREAM:api:8080}
+	}
+	handle /api/games/piano-tiles/personal-bests {
+		reverse_proxy {$API_UPSTREAM:api:8080}
+	}
+	handle /api/games/piano-tiles/start {
+		reverse_proxy {$API_UPSTREAM:api:8080}
+	}
+	handle /api/games/piano-tiles/checkpoint {
+		reverse_proxy {$API_UPSTREAM:api:8080}
+	}
+	handle /api/games/piano-tiles/submit {
+		reverse_proxy {$API_UPSTREAM:api:8080}
+	}
+	handle /api/games/piano-tiles/cancel {
+		reverse_proxy {$API_UPSTREAM:api:8080}
+	}
 	# 连连看已覆盖前端实际调用的 status/start/submit/cancel，submit 由 Go 服务端重放 moves 结算。
 	handle /api/games/linkgame/status {
 		reverse_proxy {$API_UPSTREAM:api:8080}

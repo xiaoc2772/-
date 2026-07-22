@@ -57,7 +57,7 @@ fnv1a32(bytes): h := 2166136261; for b: h ^= b; h = (h * 16777619) & 0xFFFFFFFF
   - 逐拐点段展开为**逐格序列**（步长 1000）；`pathLengthMilli = 格数×1000 - 1000`（首格中心 progress=0，末格中心 = 长度）。
   - 每个途经格记录 `centerProgress`（该格中心的累计 progress）。同一路径重复经过同一格时取**首次** progress。
 - **近战位** = 所有路径途经格的并集，减去每条路径的首格与末格；**远程位** = `rangedCells` 显式列表。两类格子互斥，一格至多一个单位。
-- 波次 HP 成长用显式数组 `waveHpPermyriad[30]`（1-based 波 w 用下标 w-1）。第 1~15 项保持旧版不变，第 16~30 项按各地图原有末段“每波增量继续 +100”的曲线外推。敌人 HP = `floor(floor(baseHp × waveHp / 10000) × mapHpPermyriad / 10000)`，再按 §7.4 祝福减免。
+- 波次 HP 成长用显式数组 `waveHpPermyriad[30]`（1-based 波 w 用下标 w-1）。2026-07-16 平衡版将相邻波次的 HP 增量增长固定为 `+40`，让前期平缓、后期持续增强但不再陡增。敌人 HP 依次叠加基础 HP、波次倍率、地图倍率和引擎内的敌人类型/特性成长，再按 §7.4 祝福减免。
 
 ## 4. 状态与实体
 
@@ -152,7 +152,10 @@ tick(state) -> bool（false = 本帧为冻结/终局 no-op）
 
 1. `hp==0` 跳过。
 2. **被阻挡**（blockedBy != 0）：若阻挡单位已不存在或 hp==0 → blockedBy=0 转 3；否则攻击：`atkCooldown>0 → 自减跳过`；否则对阻挡者结算物理伤害 `max(1, atk − def_unit_eff)`；单位 `hp<=0 → hp=0`（清扫阶段处理释放）；`atkCooldown = interval`。
-3. **移动**：`newProgress = progress + speedMilliPerFrame`。检查阻挡捕获：取该敌人所在路径上、`centerProgress ∈ (progress, newProgress]` 的近战单位格（按 centerProgress 升序）：对每个，找格上存活近战单位，若其 `当前被阻挡数（blockedBy==其id 的存活敌人数）< blockCount` → `progress = centerProgress; blockedBy = 单位id`，移动结束。金币怪**不可被阻挡**（跳过捕获检查）。
+3. **移动**：`newProgress = progress + speedMilliPerFrame`。
+   - **挤压碰撞**（仅地面可阻挡敌人）：判定箱半格（500 milli）。取同 pathIdx 上进度严格在前（或进度相同且 id 更小）的最近地面敌人 `ahead`，若存在则 `newProgress = max(progress, min(newProgress, ahead.progress − 500))`。飞行/金币怪不参与。
+   - **阻挡捕获**：拦截点 = 近战单位所在格中心的**前一格** `stop = max(0, centerProgress − 1000)`。对该敌人路径上 `centerProgress > progress` 的近战单位格（升序）：若 `stop ≤ newProgress` 且格上存活近战单位的 `当前被阻挡数 < blockCount` → `progress = max(progress, stop); blockedBy = 单位id`，移动结束（敌人已处于拦截点与单位格中心之间时原地立即受阻）。金币怪**不可被阻挡**（跳过捕获检查）。
+   - **落位挤压**：deploy 成功后，判定箱覆盖落位格（`|progress − centerProgress| < 500`）的地面敌人 `progress = max(0, progress − 500)` 且 `blockedBy = 0`（下一帧重新捕获）。
 4. 无捕获 → `progress = newProgress`；若 `progress >= pathLength` → 泄漏：`lives -= dmgToBase`（可为 0）；标记该敌人 hp=0 且**不计击杀分**（用 leaked 标志区分，清扫时一并移除）。
 
 > 实现注：泄漏用独立布尔（或 hp=0 前记录）确保不触发击杀逻辑；lives 下限不 clamp（可为负，判负即可）。
@@ -276,7 +279,8 @@ replay({seed, mapId, squad, actions[]}) -> { ok, state, result?, error? }
 - 配置含 `version` 字段；服务端会话记录该版本，重放时版本不匹配 → 会话作废（后端 M2 责任）。
 - 本规格的任何行为修改必须：改规格 → 改两端实现 → 重生成向量 → 双端测试绿，四步一个提交。
 - **v1 → v2（config version 2 → 3，2026-07-05）**：射程模型从圆形半径改为方向格集合（`rangeCells`/`auraCells`/`dir`）；deploy 动作新增 `dir`；哈希单位字段序在 `col` 后插入 `dir`；删除 `units[].range`、`engine.meleeRangeMilli`、koi `auraRange`；敌人移速 ×0.9、出怪 delay/interval ×1.15（四舍五入）；新增 serpentine/junction/highland 三图（maps 2→5）。全部向量重生成。
-- **30 波扩展（config version 2026071102，2026-07-11）**：六张地图从 15 波扩展到 30 波；前 15 波 HP、特性等级、随机出怪与第 15 波双 Boss 规则保持不变；第 16~30 波继续外推 HP、威胁预算与敌人属性，新增第 17/20/23/26/29 波祝福，第 30 波改为终局。
+- **30 波扩展（config version 2026071102，2026-07-11）**：六张地图从 15 波扩展到 30 波；新增第 17/20/23/26/29 波祝福，第 30 波改为终局。
+- **怪物成长舒缓（config version 2026071601，2026-07-16）**：降低六张地图的基础生命倍率和完整 30 波生命曲线，将每波 HP 增量增长从 `+100` 调整为 `+40`；同步降低敌人生命、攻击、防御、抗性、移速、攻速、护盾与漏怪伤害的后期成长。
 - **角色与地图再平衡（config version 2026071103，2026-07-11）**：18 名角色整体降低初始与技能数值，成长扩展到 10 级且仅 Lv5/Lv10 扩范围；重做霜熔断层、碎雾高原机制；敌人状态新增 `hazardAcc`，全部黄金向量重生成。
 
 ## 12. 实现裁定（补充语义，与 TS 参考实现一致）

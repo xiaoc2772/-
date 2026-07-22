@@ -11,11 +11,11 @@ func TestWaveExtensionConfigAndTraitCurve(t *testing.T) {
 		if len(gameMap.Waves) != 30 || len(gameMap.WaveHpPermyriad) != 30 {
 			t.Fatalf("map %s should contain 30 waves, got waves=%d hp=%d", gameMap.ID, len(gameMap.Waves), len(gameMap.WaveHpPermyriad))
 		}
-		for index := 15; index < 30; index++ {
+		for index := 2; index < 30; index++ {
 			currentIncrement := gameMap.WaveHpPermyriad[index] - gameMap.WaveHpPermyriad[index-1]
 			previousIncrement := gameMap.WaveHpPermyriad[index-1] - gameMap.WaveHpPermyriad[index-2]
-			if currentIncrement != previousIncrement+100 {
-				t.Fatalf("map %s wave %d increment mismatch: got %d want %d", gameMap.ID, index+1, currentIncrement, previousIncrement+100)
+			if currentIncrement != previousIncrement+40 {
+				t.Fatalf("map %s wave %d increment mismatch: got %d want %d", gameMap.ID, index+1, currentIncrement, previousIncrement+40)
 			}
 		}
 	}

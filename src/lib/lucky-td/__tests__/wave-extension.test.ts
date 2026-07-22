@@ -1,4 +1,4 @@
-// 幸运塔防 30 波扩展回归：锁定旧 15 波曲线，并验证后半程持续增压。
+// 幸运塔防 30 波平衡回归：锁定舒缓后的完整生命曲线，并验证成长连续性。
 
 import { describe, expect, it } from 'vitest';
 import { getEngineData } from '../engine/data';
@@ -7,13 +7,13 @@ import type { GameState } from '../engine/types';
 
 const DATA = getEngineData();
 
-const LEGACY_HP_CURVES: Record<string, number[]> = {
-  training_field: [5200, 5700, 6300, 7000, 7800, 8700, 9700, 10800, 12000, 13300, 14700, 16200, 17800, 19500, 21300],
-  brook_ford: [6000, 6600, 7300, 8100, 9000, 10000, 11100, 12300, 13600, 15000, 16500, 18100, 19800, 21600, 23500],
-  starlamp_outpost: [6800, 7500, 8300, 9200, 10200, 11300, 12500, 13800, 15200, 16700, 18300, 20000, 21800, 23700, 25700],
-  frostfire_fault: [9750, 10750, 11900, 13200, 14600, 16100, 17700, 19400, 21200, 23100, 25100, 27200, 29400, 31700, 34100],
-  rubblemist_plateau: [8000, 8800, 9700, 10700, 11800, 13000, 14300, 15700, 17200, 18800, 20500, 22300, 24200, 26200, 28300],
-  thundervoid_gate: [9400, 10400, 11500, 12700, 14000, 15400, 16900, 18500, 20200, 22000, 23900, 25900, 28000, 30200, 32500],
+const BALANCED_HP_CURVES: Record<string, number[]> = {
+  training_field: [4500, 4900, 5340, 5820, 6340, 6900, 7500, 8140, 8820, 9540, 10300, 11100, 11940, 12820, 13740, 14700, 15700, 16740, 17820, 18940, 20100, 21300, 22540, 23820, 25140, 26500, 27900, 29340, 30820, 32340],
+  brook_ford: [5200, 5650, 6140, 6670, 7240, 7850, 8500, 9190, 9920, 10690, 11500, 12350, 13240, 14170, 15140, 16150, 17200, 18290, 19420, 20590, 21800, 23050, 24340, 25670, 27040, 28450, 29900, 31390, 32920, 34490],
+  starlamp_outpost: [5800, 6300, 6840, 7420, 8040, 8700, 9400, 10140, 10920, 11740, 12600, 13500, 14440, 15420, 16440, 17500, 18600, 19740, 20920, 22140, 23400, 24700, 26040, 27420, 28840, 30300, 31800, 33340, 34920, 36540],
+  frostfire_fault: [7500, 8150, 8840, 9570, 10340, 11150, 12000, 12890, 13820, 14790, 15800, 16850, 17940, 19070, 20240, 21450, 22700, 23990, 25320, 26690, 28100, 29550, 31040, 32570, 34140, 35750, 37400, 39090, 40820, 42590],
+  rubblemist_plateau: [6800, 7350, 7940, 8570, 9240, 9950, 10700, 11490, 12320, 13190, 14100, 15050, 16040, 17070, 18140, 19250, 20400, 21590, 22820, 24090, 25400, 26750, 28140, 29570, 31040, 32550, 34100, 35690, 37320, 38990],
+  thundervoid_gate: [7600, 8250, 8940, 9670, 10440, 11250, 12100, 12990, 13920, 14890, 15900, 16950, 18040, 19170, 20340, 21550, 22800, 24090, 25420, 26790, 28200, 29650, 31140, 32670, 34240, 35850, 37500, 39190, 40920, 42690],
 };
 
 function enterWave(state: GameState, waveIndex: number): void {
@@ -32,20 +32,20 @@ function eventThreat(state: GameState): number {
 }
 
 describe('lucky-td 30 波扩展', () => {
-  it('六张地图均为 30 波，且第 1~15 波 HP 曲线完全不变', () => {
+  it('六张地图均为 30 波，且使用平衡后的完整 HP 曲线', () => {
     for (const map of DATA.config.maps) {
       expect(map.waves, map.id).toHaveLength(30);
       expect(map.waveHpPermyriad, map.id).toHaveLength(30);
-      expect(map.waveHpPermyriad.slice(0, 15), map.id).toEqual(LEGACY_HP_CURVES[map.id]);
+      expect(map.waveHpPermyriad, map.id).toEqual(BALANCED_HP_CURVES[map.id]);
     }
   });
 
-  it('第 16~30 波延续每波增量再增加 100 的原有末段曲线', () => {
+  it('每波 HP 增量仅增加 40，避免后半程指数式膨胀', () => {
     for (const map of DATA.config.maps) {
-      for (let index = 15; index < 30; index += 1) {
+      for (let index = 2; index < 30; index += 1) {
         const currentIncrement = map.waveHpPermyriad[index] - map.waveHpPermyriad[index - 1];
         const previousIncrement = map.waveHpPermyriad[index - 1] - map.waveHpPermyriad[index - 2];
-        expect(currentIncrement, `${map.id} wave ${index + 1}`).toBe(previousIncrement + 100);
+        expect(currentIncrement, `${map.id} wave ${index + 1}`).toBe(previousIncrement + 40);
       }
     }
   });

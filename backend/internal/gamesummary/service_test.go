@@ -62,6 +62,22 @@ func TestSummarizeGameRowsMatchesWinRules(t *testing.T) {
 	if luckyProgress.Wins != 2 || luckyProgress.BestWinStreak != 2 {
 		t.Fatalf("unexpected lucky td progress: %+v", luckyProgress)
 	}
+
+	pianoClassicWin, _ := json.Marshal(map[string]any{"mode": "classic", "crowns": 1})
+	pianoClassicLoss, _ := json.Marshal(map[string]any{"mode": "classic", "crowns": 0})
+	pianoRushWin, _ := json.Marshal(map[string]any{"mode": "rush", "status": "timeup", "playedMs": 60000})
+	pianoRushEarly, _ := json.Marshal(map[string]any{"mode": "rush", "status": "timeup", "playedMs": 12000})
+	pianoRushFailed, _ := json.Marshal(map[string]any{"mode": "rush", "status": "failed", "playedMs": 60000})
+	pianoProgress := summarizeGameRows([]gameRecordRow{
+		{Score: 10, Payload: pianoClassicWin},
+		{Score: 20, Payload: pianoClassicLoss},
+		{Score: 1, Payload: pianoRushWin},
+		{Score: 1, Payload: pianoRushEarly},
+		{Score: 1, Payload: pianoRushFailed},
+	}, "piano_tiles")
+	if pianoProgress.Wins != 2 || pianoProgress.BestWinStreak != 1 {
+		t.Fatalf("unexpected piano tiles progress: %+v", pianoProgress)
+	}
 }
 
 func TestToAPIKeyNormalizesWhackMole(t *testing.T) {
@@ -73,5 +89,8 @@ func TestToAPIKeyNormalizesWhackMole(t *testing.T) {
 	}
 	if got := toAPIKey("game_2048"); got != "2048" {
 		t.Fatalf("expected 2048, got %s", got)
+	}
+	if got := toAPIKey("piano_tiles"); got != "piano-tiles" {
+		t.Fatalf("expected piano-tiles, got %s", got)
 	}
 }
