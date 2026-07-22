@@ -110,7 +110,7 @@ func TestIncrementalReplayRejectsCrossBatchDensityAndHitInterval(t *testing.T) {
 func TestIncrementalReplayRejectsOrdinaryTileHoldForgery(t *testing.T) {
 	chart := regressionChart(1, 200, 200) // 普通块：d < 1.75*unitMs
 	_, err := AdvanceReplayState(chart, ModeClassic, ReplayState{}, []Event{
-		{T: 0, Lane: 0, Judgement: JudgementHit, HoldBonus: HoldBonusMax},
+		{T: 0, Lane: 0, Judgement: JudgementHit, HoldBonus: 1},
 	})
 	if err == nil {
 		t.Fatal("普通块伪造长按奖励应被拒绝")
@@ -124,6 +124,9 @@ func TestIncrementalReplayHoldThresholdUsesExactIntegerBoundary(t *testing.T) {
 	// 4*d == 7*unit 是长按边界，避免浮点比较在不同平台产生差异。
 	// unitMs 取 200（满足真实谱面单位范围），边界时值为 350ms。
 	boundary := regressionChart(1, 200, 350)
+	if !isHoldNote(boundary, boundary.Notes[0]) {
+		t.Fatal("4*d=7*unit 应识别为长按块")
+	}
 	state, err := AdvanceReplayState(boundary, ModeClassic, ReplayState{}, []Event{
 		{T: 0, Lane: 0, Judgement: JudgementHit, HoldBonus: HoldBonusMax},
 	})
@@ -148,10 +151,23 @@ func TestIncrementalReplayHoldThresholdUsesExactIntegerBoundary(t *testing.T) {
 	}
 
 	below := regressionChart(1, 200, 349)
+	if isHoldNote(below, below.Notes[0]) {
+		t.Fatal("4*d<7*unit 不应识别为长按块")
+	}
 	if _, err := AdvanceReplayState(below, ModeClassic, ReplayState{}, []Event{
-		{T: 0, Lane: 0, Judgement: JudgementHit, HoldBonus: HoldBonusMax},
+		{T: 0, Lane: 0, Judgement: JudgementHit, HoldBonus: 1},
 	}); err == nil {
 		t.Fatal("4*d<7*unit 的普通块不应获得长按奖励")
+	}
+}
+
+func TestIncrementalReplayRejectsClientReportedHoldBonus(t *testing.T) {
+	chart := regressionChart(1, 200, 350)
+	_, err := AdvanceReplayState(chart, ModeClassic, ReplayState{}, []Event{
+		{T: 0, Lane: 0, Judgement: JudgementHit, HoldBonus: 1},
+	})
+	if err == nil || !IsValidationError(err) {
+		t.Fatalf("客户端上报长按奖励必须被拒绝，得到: %v", err)
 	}
 }
 

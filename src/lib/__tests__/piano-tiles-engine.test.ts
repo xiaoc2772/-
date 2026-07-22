@@ -1,7 +1,6 @@
 import { describe, expect, test } from 'vitest';
 import {
   createEngine,
-  HOLD_BONUS_MAX,
   HOLD_UNITS_THRESHOLD,
   LAP_SPEED_STEP,
   MAX_CROWNS,
@@ -209,7 +208,7 @@ describe('长按块', () => {
     expect(engine.isHold(hold)).toBe(true);
   });
 
-  test('长按从按下瞬间起算进度，划到块尾自动结束并拿满加分', () => {
+  test('长按从按下瞬间起算进度，划到块尾自动结束且不增加竞争分', () => {
     const chart = makeChart([{ t: 500, lane: 0, d: UNIT * 4 }]);
     const engine = begin(createEngine(chart, 'classic'));
     engine.tap(0, 300); // 按下时刻 camera=300，块尾在 1500
@@ -220,19 +219,19 @@ describe('长按块', () => {
     engine.tick(900);
     const mid = engine.holdState(900)!;
     expect(mid.progress).toBeCloseTo(0.5);
-    expect(engine.score).toBe(1 + Math.floor(0.5 * HOLD_BONUS_MAX));
+    expect(engine.score).toBe(1);
 
     engine.tick(1500); // 到块尾：自动结束
     expect(engine.holdState(1500)).toBeNull();
-    expect(engine.score).toBe(1 + HOLD_BONUS_MAX);
+    expect(engine.score).toBe(1);
   });
 
-  test('提前松手按已按进度给分且不失败', () => {
+  test('提前松手结束长按且不额外计分', () => {
     const chart = makeChart([{ t: 500, lane: 0, d: UNIT * 4 }]);
     const engine = begin(createEngine(chart, 'classic'));
     engine.tap(0, 300);
     const granted = engine.release(600); // progress = 300/1200 = 0.25
-    expect(granted).toBe(Math.floor(0.25 * HOLD_BONUS_MAX));
+    expect(granted).toBe(0);
     expect(engine.holdState(600)).toBeNull();
     expect(engine.status).toBe('running');
     expect(engine.score).toBe(1 + granted);

@@ -1,11 +1,16 @@
 import { describe, expect, it } from 'vitest';
 import {
+  clearActivePianoTilesSession,
   clearPendingPianoTilesSubmission,
   isPianoCheckpointRetryPrefix,
+  PIANO_TILES_ACTIVE_SESSION_KEY,
   PIANO_TILES_PENDING_SUBMISSION_KEY,
+  readActivePianoTilesSession,
   readPendingPianoTilesSubmission,
   resolvePianoHoldBonus,
+  saveActivePianoTilesSession,
   savePendingPianoTilesSubmission,
+  shouldCancelOwnedPianoTilesSession,
   type PersistedPianoTilesSubmission,
 } from '@/lib/piano-tiles/session';
 
@@ -35,7 +40,7 @@ const sample: PersistedPianoTilesSubmission = {
   result: {
     mode: 'classic',
     status: 'failed',
-    score: 4,
+    score: 3,
     tilesHit: 3,
     crowns: 0,
     laps: 0,
@@ -47,7 +52,7 @@ const sample: PersistedPianoTilesSubmission = {
     eventOffset: 2,
     result: {
       status: 'failed',
-      score: 4,
+      score: 3,
       tilesHit: 3,
       crowns: 0,
       laps: 0,
@@ -55,7 +60,7 @@ const sample: PersistedPianoTilesSubmission = {
     },
     events: [
       { t: 100, lane: 0, j: 'h', b: 0 },
-      { t: 500, lane: 1, j: 'h', b: 3 },
+      { t: 500, lane: 1, j: 'h', b: 0 },
       { t: 2_000, lane: 2, j: 'm', b: 0 },
     ],
   },
@@ -72,11 +77,11 @@ describe('钢琴块终局提交包', () => {
     expect(isPianoCheckpointRetryPrefix([{ ...first }], pending)).toBe(false);
   });
 
-  it('长按自动划满后 release 返回 0 时保留引擎实际奖励', () => {
-    expect(resolvePianoHoldBonus(0, 3)).toBe(3);
-    expect(resolvePianoHoldBonus(2, 2)).toBe(2);
+  it('服务端权威计时落地前不会保存客户端长按奖励', () => {
+    expect(resolvePianoHoldBonus(0, 3)).toBe(0);
+    expect(resolvePianoHoldBonus(2, 2)).toBe(0);
     expect(resolvePianoHoldBonus(undefined, -1)).toBe(0);
-    expect(resolvePianoHoldBonus(9, 9)).toBe(3);
+    expect(resolvePianoHoldBonus(9, 9)).toBe(0);
   });
 
   it('可以保存并恢复增量提交包', () => {
@@ -105,5 +110,23 @@ describe('钢琴块终局提交包', () => {
     savePendingPianoTilesSubmission(storage, sample);
     clearPendingPianoTilesSubmission(storage);
     expect(readPendingPianoTilesSubmission(storage)).toBeNull();
+  });
+
+  it('只恢复当前标签页自己记录的活动会话', () => {
+    const storage = createStorage();
+    expect(saveActivePianoTilesSession(storage, 'session-1')).toBe(true);
+    expect(readActivePianoTilesSession(storage)).toBe('session-1');
+    storage.setItem(PIANO_TILES_ACTIVE_SESSION_KEY, '');
+    expect(readActivePianoTilesSession(storage)).toBeNull();
+    expect(saveActivePianoTilesSession(storage, 'x'.repeat(129))).toBe(false);
+    saveActivePianoTilesSession(storage, 'session-2');
+    clearActivePianoTilesSession(storage);
+    expect(readActivePianoTilesSession(storage)).toBeNull();
+  });
+
+  it('不会把其他标签页的活动会话识别为自己的残留会话', () => {
+    expect(shouldCancelOwnedPianoTilesSession('session-1', 'session-1')).toBe(true);
+    expect(shouldCancelOwnedPianoTilesSession('session-1', 'session-2')).toBe(false);
+    expect(shouldCancelOwnedPianoTilesSession(null, 'session-1')).toBe(false);
   });
 });

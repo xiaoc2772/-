@@ -27,7 +27,6 @@ import { fetchGameRequest, gameRequestErrorMessage } from '../_lib/request';
 import { fetchChart, fetchManifest, PianoSampler } from '@/lib/piano-tiles/audio';
 import {
   createEngine,
-  HOLD_BONUS_MAX,
   LAP_SPEED_STEP,
   MAX_SPEED_MULTIPLIER,
   MAX_CROWNS,
@@ -45,11 +44,15 @@ import type {
   PianoTilesMode,
 } from '@/lib/piano-tiles/types';
 import {
+  clearActivePianoTilesSession,
   clearPendingPianoTilesSubmission,
   isPianoCheckpointRetryPrefix,
+  readActivePianoTilesSession,
   readPendingPianoTilesSubmission,
   resolvePianoHoldBonus,
+  saveActivePianoTilesSession,
   savePendingPianoTilesSubmission,
+  shouldCancelOwnedPianoTilesSession,
   type PersistedPianoTilesSubmission,
   type PianoTilesEvent,
   type PianoTilesSubmitPayload,
@@ -73,6 +76,8 @@ const FRAME_STALL_PAUSE_MS = 1500;
 const FAIL_FLASH_MS = 900;
 /** 单次请求上限，避免断网长局恢复时生成超大 JSON。 */
 const MAX_CHECKPOINT_EVENTS = 2048;
+/** 曲库分批渲染，避免低性能设备一次创建数千个 DOM 节点。 */
+const CHART_PAGE_SIZE = 40;
 
 const API_BASE = '/api/games/piano-tiles';
 
@@ -164,7 +169,7 @@ const MODE_META: Record<
     durationPill: '无限循环',
     summary: '跟随旋律无限演奏，点错或漏块即结束本局。',
     stats: [
-      { name: '计分', value: '每块 +1 · 长按至多 +3' },
+      { name: '计分', value: '每块 +1 · 长按不额外计分' },
       { name: '皇冠', value: `每圈 1 顶 · 最多 ${MAX_CROWNS} 顶` },
       { name: '节奏', value: `每圈提速 ${Math.round(LAP_SPEED_STEP * 100)}%` },
     ],
@@ -178,7 +183,7 @@ const MODE_META: Record<
     stats: [
       { name: '时限', value: `${Math.round(RUSH_DURATION_MS / 1000)} 秒到时自动结算` },
       { name: '判定', value: '与经典一致 · 失误即结束' },
-      { name: '计分', value: '每块 +1 · 长按至多 +3' },
+      { name: '计分', value: '每块 +1 · 长按不额外计分' },
     ],
   },
 };
@@ -189,6 +194,7 @@ export default function PianoTilesPage() {
   const [error, setError] = useState<string | null>(null);
   const [search, setSearch] = useState('');
   const [starFilter, setStarFilter] = useState(0);
+  const [visibleChartCount, setVisibleChartCount] = useState(CHART_PAGE_SIZE);
   const [mode, setMode] = useState<PianoTilesMode>('classic');
   const [selected, setSelected] = useState<ChartManifestEntry | null>(null);
   const [loadProgress, setLoadProgress] = useState(0);
@@ -242,15 +248,19 @@ export default function PianoTilesPage() {
   useEffect(() => {
     let cancelled = false;
     (async () => {
+      const storage = getPianoSessionStorage();
       let restored: PersistedPianoTilesSubmission | null = null;
+      let ownedSessionId: string | null = null;
       try {
-        restored = readPendingPianoTilesSubmission(getPianoSessionStorage());
+        restored = readPendingPianoTilesSubmission(storage);
+        ownedSessionId = readActivePianoTilesSession(storage);
       } catch {
         // 某些隐私模式会禁止 sessionStorage，继续使用内存恢复流程。
       }
       if (restored) {
         pendingSubmissionRef.current = restored;
         sessionRef.current = { sessionId: restored.payload.sessionId };
+        saveActivePianoTilesSession(storage, restored.payload.sessionId);
         pendingEventsRef.current = restored.payload.events.map((event) => ({ ...event }));
         confirmedEventCountRef.current = restored.payload.eventOffset;
         submittedRef.current = true;
@@ -277,7 +287,7 @@ export default function PianoTilesPage() {
         setPhase('finished');
       } else {
         try {
-          clearPendingPianoTilesSubmission(getPianoSessionStorage());
+          clearPendingPianoTilesSubmission(storage);
         } catch {
           // 忽略存储不可用。
         }
@@ -289,9 +299,10 @@ export default function PianoTilesPage() {
       } catch (err) {
         if (!cancelled) setError(gameRequestErrorMessage(err, '加载曲目清单超时', '加载曲目清单失败'));
       }
-      // 清理残留会话：演奏中刷新/关闭页面会留下未结束的对局，后端会拒绝新开局。
-      // 已有终局提交包时必须保留会话供幂等重试；只有无法恢复的中途对局才取消。
+      // 只清理当前标签页自己记录的残留会话。其他标签页没有相同的
+      // sessionStorage 标记，不能因为看到服务端存在活动会话就擅自取消。
       if (restored) return;
+      if (!ownedSessionId) return;
       try {
         const res = await fetchGameRequest(`${API_BASE}/status`);
         const data = await res.json().catch(() => null);
@@ -300,15 +311,15 @@ export default function PianoTilesPage() {
           !cancelled &&
           !sessionRef.current &&
           res.ok &&
-          typeof staleSessionId === 'string' &&
-          staleSessionId
+          shouldCancelOwnedPianoTilesSession(ownedSessionId, staleSessionId)
         ) {
           await fetchGameRequest(`${API_BASE}/cancel`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ sessionId: staleSessionId }),
+            body: JSON.stringify({ sessionId: ownedSessionId }),
           });
         }
+        if (!cancelled && res.ok) clearActivePianoTilesSession(storage);
       } catch {
         // 未登录或网络异常时忽略；若仍有残留会话，开局时会收到明确错误
       }
@@ -336,6 +347,10 @@ export default function PianoTilesPage() {
     );
   }, [manifest, search, starFilter]);
 
+  useEffect(() => {
+    setVisibleChartCount(CHART_PAGE_SIZE);
+  }, [manifest, search, starFilter]);
+
   const syncHud = useCallback(
     (score: number, crowns: number, laps: number, rushLeftSec: number | null, started: boolean) => {
       const prev = hudRef.current;
@@ -360,8 +375,7 @@ export default function PianoTilesPage() {
     const active = activeHoldEventRef.current;
     if (!active) return;
     const inferredBonus = engine.score - active.scoreAfterHit;
-    // 长按可能在 tick 内刚好自动划满，此时 engine.release() 因内部
-    // hold 已清空会返回 0；必须以引擎实际增加的分数兜底。
+    // 保留旧事件字段的统一收口；当前权威计分关闭长按额外分，结果恒为 0。
     const bonus = resolvePianoHoldBonus(explicitBonus, inferredBonus);
     active.event.b = bonus;
     pendingEventsRef.current.push(active.event);
@@ -523,6 +537,7 @@ export default function PianoTilesPage() {
       setAwardedPoints(data?.data?.pointsAwarded ?? null);
       setSubmitNotice(null);
       clearPendingPianoTilesSubmission(getPianoSessionStorage());
+      clearActivePianoTilesSession(getPianoSessionStorage());
       pendingSubmissionRef.current = null;
       pendingEventsRef.current = [];
       sessionRef.current = null;
@@ -545,7 +560,7 @@ export default function PianoTilesPage() {
         window.clearInterval(checkpointTimerRef.current);
         checkpointTimerRef.current = null;
       }
-      // timeup / 漏块可能在长按自动结束的同一帧发生，先把最终奖励写入事件流。
+      // timeup / 漏块可能在长按自动结束的同一帧发生，先把长按事件写入事件流。
       if (activeHoldEventRef.current) {
         const bonus = engine.release(runRef.current.cameraMs);
         finalizeActiveHold(engine, bonus);
@@ -701,7 +716,7 @@ export default function PianoTilesPage() {
         }
         // 漏块检查
         if (engine.tick(run.cameraMs)) {
-          // tick 可能在同一帧结束长按并判定下一块漏掉，先落盘长按奖励，
+          // tick 可能在同一帧结束长按并判定下一块漏掉，先落盘长按事件，
           // 再追加 terminal 漏块事件，保证事件时间与分数顺序一致。
           if (activeHoldEventRef.current) {
             const bonus = engine.release(run.cameraMs);
@@ -807,7 +822,7 @@ export default function PianoTilesPage() {
       // ── 活跃长按块：保持显示并绘制进度动画 ──
       const holdView = engine.holdState(camera);
       if (run.activeHold && !holdView) {
-        // 长按已自动划满：先确定奖励再生成灰色残影。
+        // 长按已自动划满：先完成事件再生成灰色残影。
         finalizeActiveHold(engine);
         // 长按已结束（松手或划完）→ 生成灰色残影
         run.hitFades.push({ tile: run.activeHold, at: frameTime });
@@ -972,7 +987,7 @@ export default function PianoTilesPage() {
         return;
       }
     }
-    // 长按期间禁止第二个指针抢占下一块，避免奖励事件尚未确定就改变事件顺序。
+    // 长按期间禁止第二个指针抢占下一块，避免长按事件未完成就改变事件顺序。
     if (run.holding || activeHoldEventRef.current) return;
     if (engine.status !== 'running' && engine.status !== 'ready') return;
     const rect = canvas.getBoundingClientRect();
@@ -991,7 +1006,7 @@ export default function PianoTilesPage() {
     } else if (outcome.kind === 'hit') {
       samplerRef.current?.playPitches(outcome.tile.pitches);
       if (engine.isHold(outcome.tile)) {
-        // 长按块的 b 必须等松手/划满后才能确定，期间只保留延迟事件。
+        // 长按事件在松手/划满后入队；b 为旧协议兼容字段，当前恒为 0。
         activeHoldEventRef.current = {
           event: { t: now, lane, j: 'h', b: 0 },
           scoreAfterHit: engine.score,
@@ -1176,6 +1191,7 @@ export default function PianoTilesPage() {
         const data = await res.json().catch(() => null);
         if (res.ok && data?.data?.sessionId) {
           sessionRef.current = { sessionId: data.data.sessionId };
+          saveActivePianoTilesSession(getPianoSessionStorage(), data.data.sessionId);
           lastCheckpointAtRef.current = Date.now();
         } else if (res.status === 401) {
           throw new Error('请先登录后开始游戏');
@@ -1212,6 +1228,7 @@ export default function PianoTilesPage() {
             body: JSON.stringify({ sessionId: failedSession.sessionId }),
           }).catch(() => undefined);
         }
+        clearActivePianoTilesSession(getPianoSessionStorage());
         setError(gameRequestErrorMessage(err, '加载超时，请重试', '加载谱面失败'));
         setPhase('song-select');
       } finally {
@@ -1242,6 +1259,7 @@ export default function PianoTilesPage() {
     pendingSubmissionRef.current = null;
     setHasPendingSubmission(false);
     clearPendingPianoTilesSubmission(getPianoSessionStorage());
+    clearActivePianoTilesSession(getPianoSessionStorage());
     if (session) {
       try {
         await fetchGameRequest(`${API_BASE}/cancel`, {
@@ -1260,14 +1278,14 @@ export default function PianoTilesPage() {
 
   const openCancelConfirm = useCallback(() => {
     cancelHadPauseRef.current = pausedRef.current;
-    pauseGame();
+    if (phase === 'playing') pauseGame();
     setShowCancelConfirm(true);
-  }, [pauseGame]);
+  }, [phase, pauseGame]);
 
   const closeCancelConfirm = useCallback(() => {
     setShowCancelConfirm(false);
-    if (!cancelHadPauseRef.current) resumeGame();
-  }, [resumeGame]);
+    if (phase === 'playing' && !cancelHadPauseRef.current) resumeGame();
+  }, [phase, resumeGame]);
 
   const confirmCancel = useCallback(async () => {
     setShowCancelConfirm(false);
@@ -1525,7 +1543,7 @@ export default function PianoTilesPage() {
               <div className="piano-library-empty">曲目清单加载中…</div>
             ) : (
               <div className="piano-song-list" role="list">
-                {filteredCharts.slice(0, 200).map((c, idx) => (
+                {filteredCharts.slice(0, visibleChartCount).map((c, idx) => (
                   <button
                     key={c.id}
                     type="button"
@@ -1560,8 +1578,14 @@ export default function PianoTilesPage() {
                 {filteredCharts.length === 0 && (
                   <div className="piano-library-empty">没有找到匹配的曲目，换个关键词或难度试试。</div>
                 )}
-                {filteredCharts.length > 200 && (
-                  <div className="piano-library-note">仅展示前 200 首，可通过搜索继续缩小范围。</div>
+                {filteredCharts.length > visibleChartCount && (
+                  <button
+                    type="button"
+                    className="piano-library-note"
+                    onClick={() => setVisibleChartCount((count) => count + CHART_PAGE_SIZE)}
+                  >
+                    再显示 {Math.min(CHART_PAGE_SIZE, filteredCharts.length - visibleChartCount)} 首
+                  </button>
                 )}
               </div>
             )}
@@ -1705,7 +1729,7 @@ export default function PianoTilesPage() {
               </div>
                 </div>
                 <p className="piano-stage-hint">
-                  长按滑轨音块蓄力最多 +{HOLD_BONUS_MAX} 分 · 点错白键或漏块会立即结束本局
+                  长按滑轨音块需持续按住 · 当前版本每个音块统一计 1 分 · 失误立即结束
                 </p>
               </div>
             </div>
@@ -1745,16 +1769,24 @@ export default function PianoTilesPage() {
           }
           secondaryAction={
             hasPendingSubmission
-              ? undefined
+              ? { label: '放弃本局', onClick: openCancelConfirm }
               : { label: '选择其他曲目', onClick: () => setPhase('song-select') }
           }
         />
 
         <CancelConfirmModal
           open={showCancelConfirm}
-          title="确认放弃本次演奏？"
-          description="当前对局会被取消，本局不会进入积分结算。"
-          detail="已演奏的得分、皇冠与圈数进度将不会保留。"
+          title={hasPendingSubmission ? '确认放弃待结算成绩？' : '确认放弃本次演奏？'}
+          description={
+            hasPendingSubmission
+              ? '待结算记录和服务端会话会被取消，随后可以开始新的一局。'
+              : '当前对局会被取消，本局不会进入积分结算。'
+          }
+          detail={
+            hasPendingSubmission
+              ? '此操作不可恢复，当前得分、皇冠与圈数都不会保留。'
+              : '已演奏的得分、皇冠与圈数进度将不会保留。'
+          }
           onConfirm={() => void confirmCancel()}
           onClose={closeCancelConfirm}
         />
@@ -2423,11 +2455,20 @@ export default function PianoTilesPage() {
           font-weight: 800;
         }
         .piano-page .piano-library-note {
+          width: 100%;
+          border: 1px dashed #a7f3d0;
+          border-radius: 14px;
+          background: rgba(236, 253, 245, 0.72);
           padding: 12px;
           text-align: center;
-          color: #94a3b8;
+          color: #047857;
           font-size: 12px;
-          font-weight: 700;
+          font-weight: 900;
+          cursor: pointer;
+        }
+        .piano-page .piano-library-note:hover {
+          border-color: #34d399;
+          background: #ecfdf5;
         }
 
         /* ───────── 加载 ───────── */
@@ -2954,7 +2995,7 @@ function PianoRulesModal({ onClose }: { onClose: () => void }) {
           <PianoRuleCard
             icon={<Sparkles />}
             title="长按音块"
-            text={`带粉橙色滑轨的长音块点中后需按住不放：滑轨划满可额外获得 +${HOLD_BONUS_MAX} 分，中途松手按已划进度计分。`}
+            text="带粉橙色滑轨的长音块点中后需按住不放。当前版本暂不把长按时长计入积分或排行榜。"
           />
           <PianoRuleCard
             icon={<X />}

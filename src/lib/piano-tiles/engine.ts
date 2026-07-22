@@ -7,7 +7,7 @@ import type { ChartNote, CompiledChart, PianoTilesMode } from './types';
  * - 开局有一个独立的「开始」块，点击它才启动滚动，不计分
  * - 玩家按序点击黑块：可提前点（块已进屏即可），点错列（白块）即失败
  * - 黑块底边越过屏幕底部仍未点击 → 失败；无判定窗口，命中 +1 分
- * - 时值 >= 1.75 单位拍的音符为长按块，按住可得 0-3 额外分
+ * - 时值 >= 1.75 单位拍的音符为长按块；当前只保留交互，不计额外竞争分
  * - 曲目无限循环，每完成一圈提速；前三圈各得一枚皇冠
  * - rush 模式：同样机制，60 秒定时结束
  */
@@ -23,7 +23,8 @@ export const MISS_GRACE_MS = 120;
 export const VIEW_UNITS = 4;
 /** 长按块阈值：时值 >= 1.75 × 单位拍。 */
 export const HOLD_UNITS_THRESHOLD = 1.75;
-export const HOLD_BONUS_MAX = 3;
+/** 服务端权威计时落地前，长按不产生可计入积分或排行榜的额外分。 */
+export const HOLD_BONUS_MAX = 0;
 export const RUSH_DURATION_MS = 60_000;
 
 export type EngineStatus = 'ready' | 'running' | 'failed' | 'timeup';

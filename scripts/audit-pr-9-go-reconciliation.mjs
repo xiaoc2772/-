@@ -2,7 +2,6 @@ import { existsSync, readFileSync } from 'node:fs';
 
 const requiredFiles = [
   'docs/pr-9-go-reconciliation.md',
-  '3.0更新公告.md',
   'backend/internal/rankings/games.go',
   'backend/internal/rankings/games_test.go',
   'src/app/rankings/page.tsx',
@@ -41,7 +40,6 @@ if (missingFiles.length > 0) {
 }
 
 const reconciliation = read('docs/pr-9-go-reconciliation.md');
-const announcement = read('3.0更新公告.md');
 const rankingsGo = read('backend/internal/rankings/games.go');
 const rankingsTest = read('backend/internal/rankings/games_test.go');
 const rankingsPage = read('src/app/rankings/page.tsx');
@@ -54,15 +52,13 @@ const missingRequiredPhrases = [
   [reconciliation, '不能直接 merge PR #9'],
   [reconciliation, 'game_2048'],
   [reconciliation, '不恢复旧 `games/fallback`'],
-  [reconciliation, '3.0更新公告.md'],
+  [reconciliation, '不再作为长期发布门禁'],
   [rankingsGo, '{dbName: "game_2048", apiName: "game_2048"}'],
   [rankingsTest, 'TestSupportedGamesIncludesGame2048'],
   [rankingsPage, "game_2048: '2048'"],
   [rankingsPage, "game_2048: 't-2048'"],
   [rankingsPage, "if (gameType === 'game_2048') return <Grid3X3 />"],
   [game2048Page, "router.replace('/login?redirect=/games/2048')"],
-  [announcement, '服务端权威结算'],
-  [announcement, '异常状态同步'],
 ].filter(([content, phrase]) => !content.includes(phrase)).map(([, phrase]) => phrase);
 
 const forbiddenPagePhrases = [
@@ -72,8 +68,6 @@ const forbiddenPagePhrases = [
   ['src/app/games/eco/page.tsx', ecoPage, 'theftCaughtCount'],
   ['src/app/admin/users/page.tsx', adminUsersPage, '同步历史用户'],
   ['src/app/admin/users/page.tsx', adminUsersPage, '迁移新人资格'],
-  ['3.0更新公告.md', announcement, '游戏结算兜底机制'],
-  ['3.0更新公告.md', announcement, '异常兜底'],
 ].filter(([, content, phrase]) => content.includes(phrase))
   .map(([file, , phrase]) => ({ file, phrase }));
 
@@ -89,6 +83,6 @@ console.log(JSON.stringify({
   mode: 'pr-9-go-reconciliation-audit',
   checkedFiles: requiredFiles.length + requiredTileImages.length,
   checkedTileImages: requiredTileImages.length,
-  checkedRequiredPhrases: 12,
-  checkedForbiddenPhrases: 8,
+  checkedRequiredPhrases: 10,
+  checkedForbiddenPhrases: 6,
 }, null, 2));

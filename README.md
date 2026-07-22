@@ -5,13 +5,10 @@
 > 完整说明见 [`docs/local-development.md`](docs/local-development.md)。下方部分
 > Cloudflare/OpenNext 内容属于历史部署说明，不应作为当前本地初始化依据。
 
-一个以 **Next.js 16 + Cloudflare Workers/OpenNext** 为主部署形态的活动平台，最初用于兑换码分发，现已扩展为包含 **项目领取、直充、抽奖、多人抽奖、积分商城、卡牌、小游戏、公告、反馈墙、通知与管理后台** 的完整应用。
+这是一个以 **Next.js 16 + Go API/Worker + PostgreSQL + Redis** 为当前主运行形态的活动平台，最初用于兑换码分发，现已扩展为包含 **项目领取、直充、抽奖、多人抽奖、积分商城、卡牌、小游戏、公告、反馈墙、通知与管理后台** 的完整应用。
 
-> 当前仓库是 **Cloudflare-first** 方案：
-> - 主运行时：Cloudflare Workers
-> - 主数据存储：Cloudflare D1
-> - 图片与增量缓存：Cloudflare R2
-> - 非 Cloudflare 运行时保留了部分 `@vercel/kv` 兼容回退逻辑，但**完整功能以 Cloudflare 部署为准**。
+> 仓库仍保留 Cloudflare Workers/OpenNext、D1 与 R2 的历史实现和迁移资料，
+> 便于追溯旧部署与数据迁移；当前本地联调和生产切流以 Go 服务链路为准。
 
 ---
 

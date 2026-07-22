@@ -36,21 +36,29 @@ type pianoUserAggregate struct {
 	hasBest         bool
 }
 
+type pianoOverallAggregate struct {
+	UserID           int64
+	TotalPerformance int64
+	TotalPoints      int64
+	BestPerformance  int64
+	GamesPlayed      int64
+}
+
 type pianoChartLookup func(string) (pianotiles.ChartSummary, bool)
 
-func (service *Service) pianoTilesGameResult(
+func (service *Service) pianoTilesResults(
 	ctx context.Context,
 	startAt time.Time,
 	endAt time.Time,
 	limit int64,
-) (GameResult, error) {
+) (GameResult, []GameEntry, error) {
 	records, err := service.loadPianoTilesRankingRecords(ctx, startAt, endAt)
 	if err != nil {
-		return GameResult{}, err
+		return GameResult{}, nil, err
 	}
 	users, err := service.loadUsers(ctx, service.now().UnixMilli())
 	if err != nil {
-		return GameResult{}, err
+		return GameResult{}, nil, err
 	}
 	usersByID := make(map[int64]UserEntry, len(users))
 	for _, user := range users {
@@ -58,6 +66,7 @@ func (service *Service) pianoTilesGameResult(
 	}
 
 	boards := buildPianoTilesLeaderboards(records, usersByID, limit, pianotiles.ChartSummaryFor)
+	overall := buildPianoTilesOverallRows(records, usersByID, 10000, pianotiles.ChartSummaryFor)
 	selected := string(pianotiles.ModeClassic)
 	return GameResult{
 		GameType:                 "piano-tiles",
@@ -65,7 +74,7 @@ func (service *Service) pianoTilesGameResult(
 		SelectedDifficulty:       &selected,
 		DifficultyOptions:        pianoTilesDifficultyOptions(),
 		LeaderboardsByDifficulty: boards,
-	}, nil
+	}, overall, nil
 }
 
 func (service *Service) loadPianoTilesRankingRecords(
@@ -112,6 +121,72 @@ func (service *Service) loadPianoTilesRankingRecords(
 		records = append(records, record)
 	}
 	return records, rows.Err()
+}
+
+func buildPianoTilesOverallRows(
+	records []pianoRankingRecord,
+	usersByID map[int64]UserEntry,
+	limit int64,
+	lookup pianoChartLookup,
+) []GameEntry {
+	aggregates := make(map[int64]*pianoOverallAggregate)
+	for _, record := range records {
+		if !pianotiles.IsMode(record.Mode) || record.ChartID == "" {
+			continue
+		}
+		chart, ok := lookup(record.ChartID)
+		if !ok {
+			continue
+		}
+		performance := pianotiles.NormalizedPerformance(chart, record.Mode, record.Score)
+		aggregate := aggregates[record.UserID]
+		if aggregate == nil {
+			aggregate = &pianoOverallAggregate{UserID: record.UserID}
+			aggregates[record.UserID] = aggregate
+		}
+		aggregate.TotalPerformance += performance
+		aggregate.TotalPoints += record.Points
+		aggregate.GamesPlayed++
+		if performance > aggregate.BestPerformance {
+			aggregate.BestPerformance = performance
+		}
+	}
+
+	entries := make([]GameEntry, 0, len(aggregates))
+	for userID, aggregate := range aggregates {
+		user, ok := usersByID[userID]
+		if !ok {
+			continue
+		}
+		entries = append(entries, GameEntry{
+			UserEntry:       user,
+			GameType:        "piano-tiles",
+			TotalScore:      aggregate.TotalPerformance,
+			TotalPoints:     aggregate.TotalPoints,
+			BestScore:       aggregate.BestPerformance,
+			BestPerformance: aggregate.BestPerformance,
+			GamesPlayed:     aggregate.GamesPlayed,
+		})
+	}
+	sort.Slice(entries, func(i, j int) bool {
+		if entries[i].TotalScore != entries[j].TotalScore {
+			return entries[i].TotalScore > entries[j].TotalScore
+		}
+		if entries[i].TotalPoints != entries[j].TotalPoints {
+			return entries[i].TotalPoints > entries[j].TotalPoints
+		}
+		if entries[i].GamesPlayed != entries[j].GamesPlayed {
+			return entries[i].GamesPlayed < entries[j].GamesPlayed
+		}
+		return entries[i].UserID < entries[j].UserID
+	})
+	if int64(len(entries)) > limit {
+		entries = entries[:limit]
+	}
+	for index := range entries {
+		entries[index].Rank = int64(index + 1)
+	}
+	return entries
 }
 
 func buildPianoTilesLeaderboards(

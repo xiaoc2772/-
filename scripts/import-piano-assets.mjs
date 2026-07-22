@@ -12,8 +12,8 @@
  *
  * 用法：
  *   node scripts/import-piano-assets.mjs --dry-run   # 只解析并输出报告，不写文件
- *   node scripts/import-piano-assets.mjs             # 实际写入 public/games/piano-tiles/
- *   node scripts/import-piano-assets.mjs --source <dir>  # 覆盖默认素材根目录
+ *   node scripts/import-piano-assets.mjs --source <dir>  # 实际写入 public/games/piano-tiles/
+ *   $env:PIANO_TILES_SOURCE_DIR='<dir>'; node scripts/import-piano-assets.mjs --dry-run
  *   node scripts/import-piano-assets.mjs --emit-go-summary backend/internal/pianotiles/charts_summary.json
  *
  * 依赖 Node >= 22.6（原生 TS type stripping，直接复用 src/lib/piano-tiles/chart-parser.ts）。
@@ -29,8 +29,9 @@ const repoRoot = path.resolve(here, '..');
 const args = process.argv.slice(2);
 const isDryRun = args.includes('--dry-run');
 const sourceArgIndex = args.indexOf('--source');
-const DEFAULT_SOURCE = 'E:/luckyproject/piano/version4.0/extracted_resources/assets/res';
-const sourceRoot = sourceArgIndex >= 0 ? args[sourceArgIndex + 1] : DEFAULT_SOURCE;
+const sourceRoot = sourceArgIndex >= 0
+  ? args[sourceArgIndex + 1]
+  : process.env.PIANO_TILES_SOURCE_DIR?.trim();
 const emitGoIndex = args.indexOf('--emit-go-summary');
 const emitGoSummary = emitGoIndex >= 0 ? args[emitGoIndex + 1] : '';
 
@@ -87,6 +88,10 @@ function parseCsv(text) {
 }
 
 async function main() {
+  if (!sourceRoot) {
+    console.error('缺少素材根目录。请传入 --source <dir> 或设置 PIANO_TILES_SOURCE_DIR。');
+    process.exit(2);
+  }
   if (!existsSync(sourceRoot)) {
     console.error(`素材根目录不存在: ${sourceRoot}`);
     process.exit(1);

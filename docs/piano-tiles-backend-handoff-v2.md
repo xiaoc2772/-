@@ -9,7 +9,7 @@
 - 画面自动下滚，滚动进度 = 相机时间（谱面毫秒域）；每完成一圈提速 `+12%`（`LAP_SPEED_STEP=0.12`）
 - 玩家按序点击黑块，**允许提前点**（只要块已进入可视窗口 `VIEW_WINDOW_MS=2200`，相机会加速追上）
 - 点错列（白块）或黑块底边越界（容差 `MISS_GRACE_MS=60`，长按块加上时值 d）→ 立即失败
-- **无 perfect/good 判定窗口**；命中 +1 分，长按块按住给 0–3 额外分（`HOLD_BONUS_MAX=3`）
+- **无 perfect/good 判定窗口**；命中 +1 分。服务端权威计时协议完成前，长按额外分关闭（`HOLD_BONUS_MAX=0`），避免客户端伪造积分。
 - 曲目无限循环，前三圈各得一枚皇冠（`MAX_CROWNS=3`）；经典模式只能以失败或主动放弃结束
 - rush 模式：同机制，60 秒墙钟到时 `timeup` 结束
 
@@ -41,8 +41,8 @@
 4. 节奏上限（防脚本）：任意 1s 窗口内事件 ≤ 30（沿用 v1 密度校验）；相邻 `h` 事件间隔 ≥ 25ms
 5. `m`/`w` 后不得再有事件；status=failed 要求最后事件为 m/w；status=timeup 仅 rush 且 playedMs≈60s
 6. `playedMs` 与服务端 `now - startedAt` 偏差 ≤ 10s（沿用 v1）
-7. 服务端重算：score 基础分 = h 事件数；长按额外分不逐块重算，采信上限
-   `score ≤ hits + hits*HOLD_BONUS_MAX`；crowns/laps = `floor(hits / totalNotes)`，crowns 封顶 3
+7. 服务端重算：`score = h 事件数`；事件中的长按奖励兼容字段必须为 0
+   `score = hits`；crowns/laps = `floor(hits / totalNotes)`，crowns 封顶 3
 
 ## 5. 积分公式建议（替代 v1 §7）
 
@@ -81,4 +81,4 @@
    （已有 5s 余量），**无需改动**；如追求严格一致可把 400 换为按谱面注入 unitMs。
 4. **开始块**：前端开局多一个「开始」块（不计分、不上报事件），事件流仍从第一个真实
    音块开始，k-th `h` ↔ k-th note 的映射**不受影响**。
-5. 长按块判定：`d >= 1.75 × unitMs`；长按额外分仍按 §4.7 的 `hits×3` 采信封顶。
+5. 长按块判定：`d >= 1.75 × unitMs`；当前只保留长按交互，不接受客户端上报额外分。

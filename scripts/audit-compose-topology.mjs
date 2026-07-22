@@ -35,23 +35,25 @@ const requiredSnippets = [
   'PORT: "8080"',
   'PORT: "3000"',
   'NODE_ENV: production',
-  'NEXT_PUBLIC_BASE_URL: http://localhost:8080',
+  'NEXT_PUBLIC_BASE_URL: ${NEXT_PUBLIC_BASE_URL:-http://localhost:8080}',
   'DATABASE_URL: postgres://app:app@postgres:5432/app?sslmode=disable',
   'REDIS_URL: redis://redis:6379/0',
-  'SESSION_SECRET: local-development-session-secret-at-least-32-chars',
-  'ADMIN_USERNAMES: ${ADMIN_USERNAMES:-lucky}',
-  'INTERNAL_API_SECRET: local-internal-secret',
-  'NEW_API_URL: ${NEW_API_URL:-https://www.lucky04.dpdns.org}',
-  'R2_PUBLIC_URL: ""',
+  'SESSION_SECRET: ${SESSION_SECRET:-local-development-session-secret-at-least-32-chars}',
+  'ADMIN_USERNAMES: ${ADMIN_USERNAMES:-admin}',
+  'INTERNAL_API_SECRET: ${INTERNAL_API_SECRET:-local-internal-secret-at-least-32-chars}',
+  'NEW_API_URL: ${NEW_API_URL:-}',
+  'NEW_API_ADMIN_ACCESS_TOKEN: ${NEW_API_ADMIN_ACCESS_TOKEN:-}',
+  'R2_PUBLIC_URL: ${R2_PUBLIC_URL:-}',
+  'S3_ENDPOINT: ${S3_ENDPOINT:-}',
   'FEEDBACK_MEDIA_DIR: /data/feedback-media',
-  'RAFFLE_DELIVERY_CRON_SECRET: local-cron-secret',
-  'CRON_SECRET: local-cron-secret',
+  'RAFFLE_DELIVERY_CRON_SECRET: ${RAFFLE_DELIVERY_CRON_SECRET:-local-cron-secret-at-least-32-chars}',
+  'CRON_SECRET: ${CRON_SECRET:-local-cron-secret-at-least-32-chars}',
   'POSTGRES_DB: app',
   'POSTGRES_USER: app',
   'POSTGRES_PASSWORD: app',
-  '- "8080:8080"',
-  '- "5432:5432"',
-  '- "6379:6379"',
+  '- "${APP_PORT:-8080}:8080"',
+  '- "${POSTGRES_PORT:-5432}:5432"',
+  '- "${REDIS_PORT:-6379}:6379"',
   '- "3000"',
   '- "8080"',
   'postgres-data:/var/lib/postgresql/data',
@@ -64,6 +66,13 @@ const requiredSnippets = [
   '  postgres-data:',
   '  redis-data:',
   '  feedback-media-data:',
+];
+
+const forbiddenSnippets = [
+  'NEW_API_URL: ${NEW_API_URL:-https://www.lucky04.dpdns.org}',
+  'INTERNAL_API_SECRET: local-internal-secret',
+  'RAFFLE_DELIVERY_CRON_SECRET: local-cron-secret',
+  'CRON_SECRET: local-cron-secret',
 ];
 
 const requiredDependencyPairs = [
@@ -95,6 +104,7 @@ function serviceBlock(service) {
 
 const missingFiles = requiredFiles.filter((file) => !existsSync(file));
 const missingSnippets = requiredSnippets.filter((snippet) => !compose.includes(snippet));
+const insecureSnippets = forbiddenSnippets.filter((snippet) => compose.includes(snippet));
 const missingDependencies = [];
 
 for (const [service, dependency] of requiredDependencyPairs) {
@@ -104,12 +114,18 @@ for (const [service, dependency] of requiredDependencyPairs) {
   }
 }
 
-if (missingFiles.length > 0 || missingSnippets.length > 0 || missingDependencies.length > 0) {
+if (
+  missingFiles.length > 0 ||
+  missingSnippets.length > 0 ||
+  insecureSnippets.length > 0 ||
+  missingDependencies.length > 0
+) {
   console.error(JSON.stringify({
     ok: false,
     mode: 'compose-topology-audit',
     missingFiles,
     missingSnippets,
+    insecureSnippets,
     missingDependencies,
   }, null, 2));
   process.exit(1);
@@ -120,5 +136,6 @@ console.log(JSON.stringify({
   mode: 'compose-topology-audit',
   checkedFiles: requiredFiles.length,
   checkedSnippets: requiredSnippets.length,
+  checkedForbiddenSnippets: forbiddenSnippets.length,
   checkedDependencies: requiredDependencyPairs.length,
 }, null, 2));

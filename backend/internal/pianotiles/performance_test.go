@@ -34,13 +34,13 @@ func TestNormalizedPerformanceClassicUsesFullLapScore(t *testing.T) {
 			{T: 1_000, Lane: 1, Duration: 400},
 		},
 	}
-	if got := MaxLapScore(chart); got != 5 {
-		t.Fatalf("MaxLapScore() = %d, want 5", got)
+	if got := MaxLapScore(chart); got != 2 {
+		t.Fatalf("MaxLapScore() = %d, want 2", got)
 	}
-	if got := NormalizedPerformance(chart, ModeClassic, 5); got != PerformanceReference {
+	if got := NormalizedPerformance(chart, ModeClassic, 2); got != PerformanceReference {
 		t.Fatalf("one perfect lap = %d, want %d", got, PerformanceReference)
 	}
-	if got := NormalizedPerformance(chart, ModeClassic, 10); got != 2*PerformanceReference {
+	if got := NormalizedPerformance(chart, ModeClassic, 4); got != 2*PerformanceReference {
 		t.Fatalf("two perfect laps = %d, want %d", got, 2*PerformanceReference)
 	}
 }
@@ -62,7 +62,7 @@ func TestNormalizedPerformanceRushUsesSixtySecondReference(t *testing.T) {
 	}
 }
 
-func TestRushReferenceScoreIncludesPartialHoldBonus(t *testing.T) {
+func TestRushReferenceScoreIgnoresUnverifiedHoldBonus(t *testing.T) {
 	chart := ChartSummary{
 		DurationMs: 70_000,
 		UnitMs:     1_000,
@@ -71,8 +71,8 @@ func TestRushReferenceScoreIncludesPartialHoldBonus(t *testing.T) {
 			{T: 59_000, Lane: 1, Duration: 2_000},
 		},
 	}
-	// 第二块在剩余 1 秒时命中，2 秒长按可获得 floor(1/2*3)=1 分。
-	if got := RushReferenceScore(chart); got != 3 {
-		t.Fatalf("RushReferenceScore() = %d, want 3", got)
+	// 当前版本只计算两个可命中的音块，不把客户端长按时长换成额外分。
+	if got := RushReferenceScore(chart); got != 2 {
+		t.Fatalf("RushReferenceScore() = %d, want 2", got)
 	}
 }

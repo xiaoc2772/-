@@ -122,7 +122,7 @@ func (s *Service) Status(ctx context.Context, user auth.User) (StatusData, error
 	return out, err
 }
 
-// PersonalBests 返回当前用户每首内置歌曲在经典、冲刺模式下的最佳单局成绩。
+// PersonalBests 仅返回当前用户已经产生过成绩的歌曲；前端会用谱面清单补齐未游玩项。
 // 最佳成绩首先比较分数；平分时依次比较皇冠、圈数、命中数和游玩时长，
 // 最后以更早达成的记录作为稳定排序条件。
 func (s *Service) PersonalBests(ctx context.Context, user auth.User) (PersonalBestsData, error) {
@@ -192,7 +192,11 @@ func (s *Service) PersonalBests(ctx context.Context, user auth.User) (PersonalBe
 
 	songs := make([]PersonalSongBests, 0, len(byChart))
 	for _, chartID := range ChartIDs() {
-		songs = append(songs, *byChart[chartID])
+		song := byChart[chartID]
+		if song.Classic == nil && song.Rush == nil {
+			continue
+		}
+		songs = append(songs, *song)
 	}
 	return PersonalBestsData{Songs: songs}, nil
 }

@@ -1,7 +1,7 @@
 import type { ChartManifestEntry, PianoTilesMode } from './types';
-import type { EngineResult } from './engine';
+import { HOLD_BONUS_MAX, type EngineResult } from './engine';
 
-/** 钢琴块事件。b 表示该命中事件最终确认的长按奖励（普通块为 0）。 */
+/** 钢琴块事件。b 为旧协议兼容字段，当前版本必须为 0。 */
 export interface PianoTilesEvent {
   t: number;
   lane: number;
@@ -40,6 +40,54 @@ export interface PersistedPianoTilesSubmission {
 }
 
 export const PIANO_TILES_PENDING_SUBMISSION_KEY = 'piano-tiles:pending-submission:v1';
+/** 当前浏览器标签页自己创建的活动会话，避免另一标签页误取消对局。 */
+export const PIANO_TILES_ACTIVE_SESSION_KEY = 'piano-tiles:active-session:v1';
+
+function isSessionId(value: unknown): value is string {
+  return typeof value === 'string' && value.length > 0 && value.length <= 128;
+}
+
+export function shouldCancelOwnedPianoTilesSession(
+  ownedSessionId: string | null | undefined,
+  activeSessionId: unknown,
+): boolean {
+  return isSessionId(ownedSessionId) && activeSessionId === ownedSessionId;
+}
+
+export function readActivePianoTilesSession(
+  storage: Pick<Storage, 'getItem'> | null | undefined,
+): string | null {
+  if (!storage) return null;
+  try {
+    const value = storage.getItem(PIANO_TILES_ACTIVE_SESSION_KEY);
+    return isSessionId(value) ? value : null;
+  } catch {
+    return null;
+  }
+}
+
+export function saveActivePianoTilesSession(
+  storage: Pick<Storage, 'setItem'> | null | undefined,
+  sessionId: string,
+): boolean {
+  if (!storage || !isSessionId(sessionId)) return false;
+  try {
+    storage.setItem(PIANO_TILES_ACTIVE_SESSION_KEY, sessionId);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export function clearActivePianoTilesSession(
+  storage: Pick<Storage, 'removeItem'> | null | undefined,
+): void {
+  try {
+    storage?.removeItem(PIANO_TILES_ACTIVE_SESSION_KEY);
+  } catch {
+    // 忽略存储清理异常，不影响服务端会话状态。
+  }
+}
 
 /**
  * 判断上一批 checkpoint 是否仍是当前待同步队列的非空前缀。
@@ -64,7 +112,7 @@ export function isPianoCheckpointRetryPrefix(
  */
 export function resolvePianoHoldBonus(explicitBonus: number | undefined, inferredBonus: number): number {
   const resolved = Math.max(explicitBonus ?? 0, inferredBonus);
-  return Math.max(0, Math.min(3, Math.floor(resolved)));
+  return Math.max(0, Math.min(HOLD_BONUS_MAX, Math.floor(resolved)));
 }
 
 function isFiniteInt(value: unknown, min = 0): value is number {
@@ -76,7 +124,7 @@ function isEvent(value: unknown): value is PianoTilesEvent {
   const event = value as Partial<PianoTilesEvent>;
   if (!isFiniteInt(event.t) || !isFiniteInt(event.lane) || event.lane > 3) return false;
   if (event.j !== 'h' && event.j !== 'm' && event.j !== 'w') return false;
-  if (!isFiniteInt(event.b) || event.b > 3) return false;
+  if (!isFiniteInt(event.b) || event.b > HOLD_BONUS_MAX) return false;
   return event.j === 'h' ? true : event.b === 0;
 }
 

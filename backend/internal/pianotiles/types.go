@@ -26,7 +26,7 @@ type Event struct {
 	T         int64     `json:"t"`
 	Lane      int       `json:"lane"`
 	Judgement Judgement `json:"j"`
-	// HoldBonus 是该命中块最终产生的长按奖励（0~3）。普通块必须为 0。
+	// HoldBonus 为兼容旧事件格式保留；当前服务端仅接受 0。
 	HoldBonus int64 `json:"b,omitempty"`
 }
 

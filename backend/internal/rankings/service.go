@@ -246,11 +246,12 @@ func (service *Service) AllGamesLeaderboard(ctx context.Context, period string, 
 	overallMap := map[int64]*OverallEntry{}
 	for _, game := range supportedGames {
 		var gameResult GameResult
+		var breakdownRows []GameEntry
 		var err error
 		if game.dbName == "piano_tiles" {
 			// 钢琴块不能把不同歌曲的原始分数直接放在同一榜单；
 			// 独立聚合会按谱面星级和标准表现生成模式×星级榜。
-			gameResult, err = service.pianoTilesGameResult(ctx, startTime, endTime, safeLimit)
+			gameResult, breakdownRows, err = service.pianoTilesResults(ctx, startTime, endTime, safeLimit)
 		} else {
 			allRows, rowsErr := service.gameLeaderboardRows(ctx, game, startTime, endTime, safeLimit, "")
 			if rowsErr != nil {
@@ -280,7 +281,9 @@ func (service *Service) AllGamesLeaderboard(ctx context.Context, period string, 
 		}
 		games = append(games, gameResult)
 
-		breakdownRows, err := service.gameLeaderboardRows(ctx, game, startTime, endTime, 10000, "")
+		if game.dbName != "piano_tiles" {
+			breakdownRows, err = service.gameLeaderboardRows(ctx, game, startTime, endTime, 10000, "")
+		}
 		if err != nil {
 			return AllGamesResult{}, err
 		}

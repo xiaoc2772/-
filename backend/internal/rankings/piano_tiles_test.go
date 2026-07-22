@@ -69,6 +69,43 @@ func TestPianoTilesBoardsNormalizeAcrossSongs(t *testing.T) {
 	}
 }
 
+func TestPianoTilesOverallRowsUseNormalizedPerformance(t *testing.T) {
+	charts := map[string]pianotiles.ChartSummary{
+		"long": {
+			DurationMs: 10_000,
+			UnitMs:     200,
+			Notes:      make([]pianotiles.ChartNote, 100),
+		},
+		"short": {
+			DurationMs: 10_000,
+			UnitMs:     200,
+			Notes:      make([]pianotiles.ChartNote, 50),
+		},
+	}
+	users := map[int64]UserEntry{
+		1: {UserID: 1, Username: "long-song"},
+		2: {UserID: 2, Username: "short-song"},
+	}
+	records := []pianoRankingRecord{
+		{UserID: 1, Score: 100, Points: 2, ChartID: "long", Mode: pianotiles.ModeClassic},
+		{UserID: 2, Score: 75, Points: 1, ChartID: "short", Mode: pianotiles.ModeClassic},
+	}
+
+	rows := buildPianoTilesOverallRows(records, users, 10, func(id string) (pianotiles.ChartSummary, bool) {
+		chart, ok := charts[id]
+		return chart, ok
+	})
+	if len(rows) != 2 {
+		t.Fatalf("overall rows length = %d, want 2", len(rows))
+	}
+	if rows[0].UserID != 2 || rows[0].TotalScore <= rows[1].TotalScore {
+		t.Fatalf("overall rows should rank by normalized performance: %+v", rows)
+	}
+	if rows[0].BestPerformance != rows[0].TotalScore {
+		t.Fatalf("single-play total and best performance should match: %+v", rows[0])
+	}
+}
+
 func TestPianoTilesBoardsFilterModeAndStars(t *testing.T) {
 	charts := map[string]pianotiles.ChartSummary{
 		"one": {

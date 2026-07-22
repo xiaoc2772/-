@@ -63,7 +63,7 @@ PR #9 仍是 GitHub 上的 open PR，尚未 merge 到 `main`。
   - `src/app/rankings/page.tsx`
   - `/api/rankings/games` 会返回 `game_2048` 分游戏榜。
 - PR #9 v3.0 更新公告内容已补接：
-  - `3.0更新公告.md`
+  - 当期版本公告（历史上为 `3.0更新公告.md`）
   - 文案已按当前 Go 版口径修正，不再宣称旧 `games/fallback` 兜底结算或 Go 契约不存在的环保追回保护字段。
 - PR #9 首页公告/抽奖可见 UI 已补接：
   - `src/app/page.tsx`
@@ -119,7 +119,7 @@ PR #9 仍是 GitHub 上的 open PR，尚未 merge 到 `main`。
 本轮复核补充：
 
 - 2048 排行榜已补接到 Go 排行榜配置和前端排行榜页，`/api/rankings/games` 会把 `game_2048` 作为独立游戏榜返回。
-- 2048 素材、封面和吉祥物已存在；PR #9 根目录 `3.0更新公告.md` 此前遗漏，本轮已补接并修正文案以匹配 Go 版服务端权威结算。
+- 2048 素材、封面和吉祥物已存在；历史版本公告曾补接并修正文案以匹配 Go 版服务端权威结算。版本公告会随发布迭代，不再作为长期发布门禁。
 - `src/app/games/2048/page.tsx` 和 PR #9 的剩余差异是有意保留：当前版本移除了旧 `requestGameFallback`，401 时跳转登录，结算只认 Go 服务端。
 - `src/app/games/eco/page.tsx` 中 PR #9 的 `stealProtectedUntil` / `theftCaughtCount` 展示没有原样恢复，因为当前 Go `EcoPublicBoardView` 契约没有这些字段；继续展示已偷盗状态、偷盗留言、服务端返回的 `stealDisabledReason`。
 - 后台用户页没有恢复 `同步历史用户` / `迁移新人资格` 两个按钮；这两个旧工具入口在当前 Go 生产路径中是墓碑化/禁用语义。
@@ -231,8 +231,8 @@ npm run audit:pr-9-go-reconciliation
 该审计覆盖：
 
 1. 2048 排行榜必须同时存在于 Go `supportedGames`、Go 测试和前端排行榜页。
-2. 2048 素材、封面、吉祥物和 `3.0更新公告.md` 必须存在。
-3. 公告文案必须使用当前 Go 版服务端权威结算口径，不再宣称旧 fallback 兜底。
+2. 2048 素材、封面和吉祥物必须存在。
+3. 当前版本公告应使用 Go 版服务端权威结算口径，但版本化公告文件不再作为长期发布门禁。
 4. 2048 与星尘迷阵页面不得恢复 `requestGameFallback`。
 5. 环保页不得展示 Go 契约不存在的 `stealProtectedUntil` / `theftCaughtCount`。
 6. 后台用户页不得恢复旧 `同步历史用户` / `迁移新人资格` 按钮。

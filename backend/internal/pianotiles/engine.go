@@ -10,8 +10,10 @@ import (
 )
 
 const (
-	ViewWindowMS       = int64(2_200)
-	HoldBonusMax       = int64(3)
+	ViewWindowMS = int64(2_200)
+	// 客户端无法证明真实按住时长；在服务端权威计时协议落地前，
+	// 长按只保留交互效果，不计入积分和排行榜，避免伪造奖励。
+	HoldBonusMax       = int64(0)
 	MaxCrowns          = 3
 	MinHitIntervalMS   = int64(25)
 	LapTailMinimumMS   = int64(400)
@@ -128,7 +130,7 @@ func AdvanceReplayState(chart ChartSummary, mode Mode, current ReplayState, even
 				return ReplayState{}, validationError("hit_too_late", fmt.Sprintf("第 %d 个命中事件超过节奏上限", state.Hits+1))
 			}
 			if event.HoldBonus < 0 || event.HoldBonus > HoldBonusMax {
-				return ReplayState{}, validationError("invalid_hold_bonus", "长按奖励必须在 0 到 3 之间")
+				return ReplayState{}, validationError("invalid_hold_bonus", "当前版本不接受客户端长按奖励")
 			}
 			isHold := isHoldNote(chart, note)
 			if event.HoldBonus > 0 && !isHold {
