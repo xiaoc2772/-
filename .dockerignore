@@ -4,6 +4,8 @@ node_modules
 .wrangler
 .vercel
 .gocache
+.go-cache
+.go-mod-cache
 .tmp
 .git
 .gitignore

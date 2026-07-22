@@ -77,11 +77,12 @@ type CheckinResult struct {
 
 type GameEntry struct {
 	UserEntry
-	GameType    string `json:"gameType"`
-	TotalScore  int64  `json:"totalScore"`
-	TotalPoints int64  `json:"totalPoints"`
-	BestScore   int64  `json:"bestScore"`
-	GamesPlayed int64  `json:"gamesPlayed"`
+	GameType        string `json:"gameType"`
+	TotalScore      int64  `json:"totalScore"`
+	TotalPoints     int64  `json:"totalPoints"`
+	BestScore       int64  `json:"bestScore"`
+	BestPerformance int64  `json:"bestPerformance,omitempty"`
+	GamesPlayed     int64  `json:"gamesPlayed"`
 }
 
 type GameDifficultyOption struct {

@@ -9,7 +9,7 @@ services:
       API_UPSTREAM: api:8080
       WEB_UPSTREAM: web:3000
     ports:
-      - "8080:8080"
+      - "${APP_PORT:-8080}:8080"
     depends_on:
       - web
       - api
@@ -22,8 +22,8 @@ services:
     environment:
       PORT: "3000"
       NODE_ENV: production
-      NEXT_PUBLIC_BASE_URL: http://localhost:8080
-      SESSION_SECRET: local-development-session-secret-at-least-32-chars
+      NEXT_PUBLIC_BASE_URL: ${NEXT_PUBLIC_BASE_URL:-http://localhost:8080}
+      SESSION_SECRET: ${SESSION_SECRET:-local-development-session-secret-at-least-32-chars}
       ADMIN_USERNAMES: ${ADMIN_USERNAMES:-admin}
     expose:
       - "3000"
@@ -39,12 +39,25 @@ services:
       PORT: "8080"
       DATABASE_URL: postgres://app:app@postgres:5432/app?sslmode=disable
       REDIS_URL: redis://redis:6379/0
-      SESSION_SECRET: local-development-session-secret-at-least-32-chars
+      SESSION_SECRET: ${SESSION_SECRET:-local-development-session-secret-at-least-32-chars}
       ADMIN_USERNAMES: ${ADMIN_USERNAMES:-admin}
-      INTERNAL_API_SECRET: local-internal-secret
+      INTERNAL_API_SECRET: ${INTERNAL_API_SECRET:-local-internal-secret-at-least-32-chars}
       NEW_API_URL: ${NEW_API_URL:-}
-      R2_PUBLIC_URL: ""
+      NEW_API_ADMIN_ACCESS_TOKEN: ${NEW_API_ADMIN_ACCESS_TOKEN:-}
+      NEW_API_ADMIN_USER_ID: ${NEW_API_ADMIN_USER_ID:-}
+      NEW_API_ADMIN_USERNAME: ${NEW_API_ADMIN_USERNAME:-}
+      NEW_API_ADMIN_PASSWORD: ${NEW_API_ADMIN_PASSWORD:-}
+      R2_PUBLIC_URL: ${R2_PUBLIC_URL:-}
+      S3_ENDPOINT: ${S3_ENDPOINT:-}
+      S3_ACCESS_KEY_ID: ${S3_ACCESS_KEY_ID:-}
+      S3_SECRET_ACCESS_KEY: ${S3_SECRET_ACCESS_KEY:-}
+      S3_BUCKET_FEEDBACK_IMAGES: ${S3_BUCKET_FEEDBACK_IMAGES:-feedback-images}
+      S3_BUCKET_CARD_IMAGES: ${S3_BUCKET_CARD_IMAGES:-card-images}
       FEEDBACK_MEDIA_DIR: /data/feedback-media
+      FEEDBACK_MEDIA_PUBLIC_URL: ${FEEDBACK_MEDIA_PUBLIC_URL:-}
+      RESEND_API_KEY: ${RESEND_API_KEY:-}
+      RESEND_API_URL: ${RESEND_API_URL:-https://api.resend.com/emails}
+      FARM_MAIL_FROM: ${FARM_MAIL_FROM:-}
     expose:
       - "8080"
     volumes:
@@ -64,10 +77,13 @@ services:
       APP_MODE: worker
       DATABASE_URL: postgres://app:app@postgres:5432/app?sslmode=disable
       REDIS_URL: redis://redis:6379/0
-      SESSION_SECRET: local-development-session-secret-at-least-32-chars
-      INTERNAL_API_SECRET: local-internal-secret
-      RAFFLE_DELIVERY_CRON_SECRET: local-cron-secret
-      CRON_SECRET: local-cron-secret
+      SESSION_SECRET: ${SESSION_SECRET:-local-development-session-secret-at-least-32-chars}
+      INTERNAL_API_SECRET: ${INTERNAL_API_SECRET:-local-internal-secret-at-least-32-chars}
+      RAFFLE_DELIVERY_CRON_SECRET: ${RAFFLE_DELIVERY_CRON_SECRET:-local-cron-secret-at-least-32-chars}
+      CRON_SECRET: ${CRON_SECRET:-local-cron-secret-at-least-32-chars}
+      RESEND_API_KEY: ${RESEND_API_KEY:-}
+      RESEND_API_URL: ${RESEND_API_URL:-https://api.resend.com/emails}
+      FARM_MAIL_FROM: ${FARM_MAIL_FROM:-}
     depends_on:
       postgres:
         condition: service_healthy
@@ -81,7 +97,7 @@ services:
       POSTGRES_USER: app
       POSTGRES_PASSWORD: app
     ports:
-      - "5432:5432"
+      - "${POSTGRES_PORT:-5432}:5432"
     volumes:
       - postgres-data:/var/lib/postgresql/data
     healthcheck:
@@ -93,7 +109,7 @@ services:
   redis:
     image: redis:7-alpine
     ports:
-      - "6379:6379"
+      - "${REDIS_PORT:-6379}:6379"
     volumes:
       - redis-data:/data
     healthcheck:

@@ -13,6 +13,7 @@ import {
   Grid3X3,
   Home,
   Loader2,
+  Music,
   Recycle,
   RefreshCw,
   Shield,
@@ -29,7 +30,7 @@ type SimplePeriod = 'all' | 'monthly';
 type LotteryPeriod = 'daily' | 'weekly' | 'monthly';
 type EcoPeriod = 'daily' | 'weekly' | 'monthly';
 
-type SupportedGame = 'linkgame' | 'match3' | 'memory' | 'whack_mole' | 'roguelite' | 'minesweeper' | 'game_2048' | 'lucky_td';
+type SupportedGame = 'linkgame' | 'match3' | 'memory' | 'whack_mole' | 'roguelite' | 'minesweeper' | 'game_2048' | 'lucky_td' | 'piano-tiles';
 
 interface GameOverallEntry {
   rank: number;
@@ -53,6 +54,8 @@ interface GameEntry {
   totalScore: number;
   totalPoints: number;
   bestScore: number;
+  /** 钢琴块标准表现，10000 基点 = 100.00%。 */
+  bestPerformance?: number;
   gamesPlayed: number;
 }
 
@@ -191,6 +194,7 @@ const GAME_LABEL: Record<SupportedGame, string> = {
   minesweeper: '扫雷',
   game_2048: '2048',
   lucky_td: '幸运塔防',
+  'piano-tiles': '钢琴块',
 };
 
 const GAME_CAPTION: Record<SupportedGame, string> = {
@@ -202,6 +206,7 @@ const GAME_CAPTION: Record<SupportedGame, string> = {
   minesweeper: 'MINESWEEPER',
   game_2048: '2048',
   lucky_td: 'LUCKY TOWER DEFENSE',
+  'piano-tiles': 'PIANO TILES',
 };
 
 const GAME_THEME: Record<SupportedGame, string> = {
@@ -213,6 +218,7 @@ const GAME_THEME: Record<SupportedGame, string> = {
   minesweeper: 't-mines',
   game_2048: 't-2048',
   lucky_td: 't-lucky-td',
+  'piano-tiles': 't-piano-tiles',
 };
 
 const GAME_METRIC_LABEL: Record<SupportedGame, string> = {
@@ -224,6 +230,7 @@ const GAME_METRIC_LABEL: Record<SupportedGame, string> = {
   minesweeper: '最佳单局',
   game_2048: '最佳单局',
   lucky_td: '最佳单局',
+  'piano-tiles': '标准表现',
 };
 
 const GAME_UNIT: Record<SupportedGame, string> = {
@@ -235,6 +242,7 @@ const GAME_UNIT: Record<SupportedGame, string> = {
   minesweeper: '分',
   game_2048: '分',
   lucky_td: '分',
+  'piano-tiles': '分',
 };
 
 const AVATAR_VARIANT_COUNT = 5;
@@ -284,6 +292,18 @@ function AchievementPill({ achievement, compact = false }: { achievement?: Publi
 
 function formatNumber(value: number): string {
   return value.toLocaleString('zh-CN');
+}
+
+function formatGameMetric(gameType: SupportedGame, entry: GameEntry): { value: string; unit: string; title?: string } {
+  if (gameType === 'piano-tiles' && entry.bestPerformance !== undefined) {
+    const percentage = entry.bestPerformance / 100;
+    return {
+      value: percentage.toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 }),
+      unit: '%',
+      title: '标准表现：经典满分一圈为 100%；冲刺模式以基础速度下 60 秒参考满分为 100%。',
+    };
+  }
+  return { value: formatNumber(entry.bestScore ?? entry.totalScore), unit: GAME_UNIT[gameType] };
 }
 
 function getNextMonthStart(now: Date): Date {
@@ -488,7 +508,7 @@ const RANKING_RULES = [
       {
         label: '收录游戏',
         items: [
-          '当前收录：连连看、消消乐、记忆翻牌、打地鼠、星尘迷阵（肉鸽）、扫雷、2048、幸运塔防。',
+          '当前收录：连连看、消消乐、记忆翻牌、打地鼠、星尘迷阵（肉鸽）、扫雷、2048、幸运塔防、钢琴块。',
           '每款游戏独立结算与排名，互不影响。',
           '后续上线的新游戏会在评估稳定后接入。',
         ],
@@ -497,8 +517,9 @@ const RANKING_RULES = [
         label: '周期与计算',
         items: [
           '可在日榜 / 周榜 / 月榜之间切换，周期定义同抽奖榜。',
-          '排序依据为周期内该游戏的最高单局得分，榜单数字展示的也是这一次最好成绩。',
-          '连连看、记忆翻牌、打地鼠、扫雷支持「全部难度 / 简单 / 普通 / 困难」切换；幸运塔防支持「全部地图」与六张地图分别查看。',
+          '普通游戏按周期内最高单局得分排序；钢琴块按标准表现排序，避免不同歌曲长度和密度造成分数偏差。',
+          '连连看、记忆翻牌、打地鼠、扫雷支持「全部难度 / 简单 / 普通 / 困难」切换；幸运塔防支持地图筛选；钢琴块支持经典/冲刺 × 1–5 星及全星级榜。',
+          '钢琴块标准表现中，经典满分一圈为 100%；冲刺模式以基础速度下 60 秒参考满分为 100%，超过 100% 表示完成更多等效进度。',
           '最好单局同分时，优先比较本周期获得积分，再按局数较少者优先，仍相同时按用户 ID 升序。',
         ],
       },
@@ -3445,6 +3466,7 @@ export default function RankingsPage() {
         .rk-page .game-card.t-mines::before { background: rgba(71, 85, 105, 0.4); }
         .rk-page .game-card.t-2048::before { background: rgba(16, 185, 129, 0.4); }
         .rk-page .game-card.t-lucky-td::before { background: rgba(249, 115, 22, 0.4); }
+        .rk-page .game-card.t-piano-tiles::before { background: rgba(99, 102, 241, 0.4); }
 
         .rk-page .game-card:hover {
           transform: translateY(-4px);
@@ -3485,6 +3507,7 @@ export default function RankingsPage() {
         .rk-page .game-card.t-mines .gc-icon { color: #475569; box-shadow: 0 10px 20px rgba(71, 85, 105, 0.22); }
         .rk-page .game-card.t-2048 .gc-icon { color: #059669; box-shadow: 0 10px 20px rgba(16, 185, 129, 0.22); }
         .rk-page .game-card.t-lucky-td .gc-icon { color: #ea580c; box-shadow: 0 10px 20px rgba(249, 115, 22, 0.22); }
+        .rk-page .game-card.t-piano-tiles .gc-icon { color: #4f46e5; box-shadow: 0 10px 20px rgba(99, 102, 241, 0.22); }
 
         .rk-page .gc-title-wrap { flex: 1; min-width: 0; }
 
@@ -3545,6 +3568,16 @@ export default function RankingsPage() {
           letter-spacing: 0.3px;
         }
 
+        .rk-page .gc-performance-note {
+          position: relative;
+          z-index: 1;
+          margin: -8px 0 10px;
+          color: var(--text-light);
+          font-size: 10px;
+          line-height: 1.35;
+          letter-spacing: 0.05px;
+        }
+
         .rk-page .game-card.t-link .gc-metric-tag { background: rgba(59, 130, 246, 0.1); color: var(--c-blue); }
         .rk-page .game-card.t-eliminate .gc-metric-tag { background: rgba(236, 72, 153, 0.1); color: var(--c-pink); }
         .rk-page .game-card.t-memory .gc-metric-tag { background: rgba(139, 92, 246, 0.1); color: var(--c-purple); }
@@ -3553,6 +3586,7 @@ export default function RankingsPage() {
         .rk-page .game-card.t-mines .gc-metric-tag { background: rgba(71, 85, 105, 0.1); color: #475569; }
         .rk-page .game-card.t-2048 .gc-metric-tag { background: rgba(16, 185, 129, 0.1); color: #059669; }
         .rk-page .game-card.t-lucky-td .gc-metric-tag { background: rgba(249, 115, 22, 0.1); color: #c2410c; }
+        .rk-page .game-card.t-piano-tiles .gc-metric-tag { background: rgba(99, 102, 241, 0.1); color: #4f46e5; }
 
         .rk-page .gc-top5 {
           display: flex;
@@ -5193,7 +5227,7 @@ interface GameCardProps {
 
 function GameCard({ group, myUserId }: GameCardProps) {
   const themeClass = GAME_THEME[group.gameType] ?? '';
-  const filterKind = group.gameType === 'lucky_td' ? '地图' : '难度';
+  const filterKind = group.gameType === 'lucky_td' ? '地图' : group.gameType === 'piano-tiles' ? '模式和星级' : '难度';
   const defaultDifficulty = group.selectedDifficulty
     ?? group.difficultyOptions?.[0]?.value
     ?? '';
@@ -5237,6 +5271,11 @@ function GameCard({ group, myUserId }: GameCardProps) {
           <span className="gc-metric-tag">{GAME_METRIC_LABEL[group.gameType]}</span>
         </div>
       </div>
+      {group.gameType === 'piano-tiles' && (
+        <div className="gc-performance-note">
+          标准表现：满分一圈 / 60 秒参考满分 = 100%
+        </div>
+      )}
       {top5.length > 0 ? (
         <div className="gc-top5">
           {top5.map((entry) => {
@@ -5244,6 +5283,7 @@ function GameCard({ group, myUserId }: GameCardProps) {
             const rankClass = entry.rank <= 3 ? `r-${entry.rank}` : '';
             const rowRankClass = entry.rank <= 3 ? `r-${entry.rank}` : '';
             const avatarVariant = `av-${getAvatarVariant(entry.userId, MINI_AVATAR_VARIANT_COUNT)}`;
+            const metric = formatGameMetric(group.gameType, entry);
             return (
               <div
                 key={`${group.gameType}-${entry.userId}`}
@@ -5255,9 +5295,9 @@ function GameCard({ group, myUserId }: GameCardProps) {
                   <span>{resolveDisplayName(entry)}</span>
                   <AchievementPill achievement={entry.equippedAchievement} compact />
                 </div>
-                <div className="gc-row-score">
-                  {formatNumber(entry.bestScore ?? entry.totalScore)}
-                  <span className="unit">{GAME_UNIT[group.gameType]}</span>
+                <div className="gc-row-score" title={metric.title}>
+                  {metric.value}
+                  {metric.unit && <span className="unit">{metric.unit}</span>}
                 </div>
               </div>
             );
@@ -5282,5 +5322,6 @@ function GameIcon({ gameType }: { gameType: SupportedGame }) {
   if (gameType === 'minesweeper') return <Bomb />;
   if (gameType === 'game_2048') return <Grid3X3 />;
   if (gameType === 'lucky_td') return <Shield />;
+  if (gameType === 'piano-tiles') return <Music />;
   return <Sparkles />;
 }

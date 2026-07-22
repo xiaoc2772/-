@@ -396,22 +396,22 @@ function enemyHpPermyriad(typeIdx: number, waveIndex: number, tier: number): num
   if (typeIdx === data.coinEnemyIdx) {
     return 10000;
   }
-  let value = waveIndex <= 1 ? 7000 : waveIndex === 2 ? 8000 : 8700 + Math.max(0, waveIndex - 4) * 240 + tier * 240;
+  let value = waveIndex <= 1 ? 6800 : waveIndex === 2 ? 7800 : 8500 + Math.max(0, waveIndex - 4) * 170 + tier * 180;
   switch (enemyId(typeIdx)) {
     case 'boss':
-      value += 450 + tier * 200;
+      value += 400 + tier * 160;
       break;
     case 'golem':
-      value += 260 + tier * 120;
+      value += 230 + tier * 100;
       break;
     case 'puppet':
-      value += 150 + tier * 100;
+      value += 130 + tier * 80;
       break;
     case 'drone':
-      value -= 600;
+      value -= 550;
       break;
     case 'wolf':
-      value -= 250;
+      value -= 220;
       break;
     default:
       break;
@@ -423,13 +423,13 @@ function enemyAtkPermyriad(typeIdx: number, waveIndex: number, tier: number): nu
   if (typeIdx === data.coinEnemyIdx) {
     return 10000;
   }
-  let value = waveIndex <= 1 ? 6700 : waveIndex === 2 ? 7800 : 8500 + Math.max(0, waveIndex - 3) * 280 + tier * 170;
+  let value = waveIndex <= 1 ? 6400 : waveIndex === 2 ? 7400 : 8300 + Math.max(0, waveIndex - 3) * 200 + tier * 130;
   switch (enemyId(typeIdx)) {
     case 'boss':
-      value += 400 + tier * 150;
+      value += 320 + tier * 110;
       break;
     case 'wolf':
-      value += 80;
+      value += 60;
       break;
     case 'drone':
       value -= 150;
@@ -444,13 +444,13 @@ function enemySpeedPermyriad(typeIdx: number, waveIndex: number, tier: number): 
   if (typeIdx === data.coinEnemyIdx) {
     return 10000;
   }
-  let value = waveIndex <= 1 ? 8300 : waveIndex === 2 ? 9100 : 9500 + Math.max(0, waveIndex - 4) * 130 + tier * 110;
+  let value = waveIndex <= 1 ? 8100 : waveIndex === 2 ? 8900 : 9400 + Math.max(0, waveIndex - 4) * 90 + tier * 80;
   switch (enemyId(typeIdx)) {
     case 'wolf':
-      value += 1200 + tier * 180;
+      value += 1080 + tier * 140;
       break;
     case 'drone':
-      value += 600 + tier * 120;
+      value += 540 + tier * 90;
       break;
     case 'golem':
       value -= 900;
@@ -468,15 +468,15 @@ function enemyAttackSpeedPermyriad(typeIdx: number, waveIndex: number, tier: num
   if (typeIdx === data.coinEnemyIdx) {
     return 10000;
   }
-  let value = 10000 + Math.max(0, waveIndex - 5) * 160 + tier * 130;
+  let value = 9900 + Math.max(0, waveIndex - 5) * 110 + tier * 90;
   if (enemyId(typeIdx) === 'wolf') {
-    value += 300;
+    value += 260;
   }
   if (enemyId(typeIdx) === 'drone') {
-    value += 180;
+    value += 150;
   }
   if (enemyId(typeIdx) === 'boss') {
-    value += 300;
+    value += 250;
   }
   return value;
 }
@@ -486,9 +486,9 @@ function enemyDefValue(typeIdx: number, waveIndex: number, tier: number): number
   if (typeIdx === data.coinEnemyIdx) {
     return cfg.def;
   }
-  let value = cfg.def + Math.max(0, waveIndex - 5) * 6 + tier * 14;
+  let value = cfg.def + Math.max(0, waveIndex - 5) * 4 + tier * 9;
   if (enemyId(typeIdx) === 'golem') {
-    value += 20 + tier * 14;
+    value += 16 + tier * 10;
   }
   return value;
 }
@@ -498,14 +498,14 @@ function enemyResValue(typeIdx: number, waveIndex: number, tier: number): number
   if (typeIdx === data.coinEnemyIdx) {
     return cfg.res;
   }
-  let value = cfg.res + Math.max(0, waveIndex - 7) * 80 + tier * 170;
+  let value = cfg.res + Math.max(0, waveIndex - 7) * 50 + tier * 115;
   if (enemyId(typeIdx) === 'puppet') {
-    value += 350 + tier * 160;
+    value += 280 + tier * 115;
   }
   if (enemyId(typeIdx) === 'boss') {
-    value += 220 + tier * 100;
+    value += 180 + tier * 75;
   }
-  return Math.min(7000, value);
+  return Math.min(6500, value);
 }
 
 function ok(): ActionResult {
@@ -638,6 +638,20 @@ function applyDeploy(state: GameState, action: GameAction): ActionResult {
     attackCount: 0,
   });
   state.activeSkillCooldown[typeIdx] = activeSkillCooldownFor(typeIdx, state.activeSkillLevels[typeIdx] ?? 1);
+  // 落位挤压：判定箱（半格 500）覆盖该格的地面敌人被推退半格，并解除阻挡待重新判定
+  for (const enemy of state.enemies) {
+    if (enemy.hp === 0 || !data.config.enemies[enemy.typeIdx].blockable) {
+      continue;
+    }
+    const path = enemyPath(state, enemy);
+    for (const cell of path.cells) {
+      if (cell.row === row && cell.col === col && Math.abs(enemy.progress - cell.centerProgress) < 500) {
+        enemy.progress = Math.max(0, enemy.progress - 500);
+        enemy.blockedBy = 0;
+        break;
+      }
+    }
+  }
   return ok();
 }
 
@@ -1390,9 +1404,9 @@ function spawnEnemy(state: GameState, typeIdx: number, pathIdx: number): void {
   }
   let shield =
     enemyId(typeIdx) === 'puppet'
-      ? pm(hp, 900 + tier * 220 + Math.max(0, state.waveIndex - 8) * 50)
+      ? pm(hp, 720 + tier * 160 + Math.max(0, state.waveIndex - 8) * 30)
       : enemyId(typeIdx) === 'boss'
-        ? pm(hp, 300 + tier * 100)
+        ? pm(hp, 250 + tier * 75)
         : 0;
   for (const mechanic of map.cfg.mechanics ?? []) {
     if (typeIdx !== data.coinEnemyIdx && mechanic.enemyShieldPermyriad && mechanic.enemyShieldPermyriad > 0) {
@@ -1402,7 +1416,7 @@ function spawnEnemy(state: GameState, typeIdx: number, pathIdx: number): void {
   const skillCooldown = enemySkillBaseCooldown(enemyId(typeIdx), tier);
   let def = enemyDefValue(typeIdx, state.waveIndex, tier);
   let res = enemyResValue(typeIdx, state.waveIndex, tier);
-  let dmgToBase = cfg.dmgToBase + (typeIdx !== data.coinEnemyIdx && state.waveIndex >= 12 ? 1 : 0) + (enemyId(typeIdx) === 'boss' && state.waveIndex >= 14 ? 1 : 0);
+  let dmgToBase = cfg.dmgToBase + (typeIdx !== data.coinEnemyIdx && state.waveIndex >= 16 ? 1 : 0) + (enemyId(typeIdx) === 'boss' && state.waveIndex >= 22 ? 1 : 0);
   for (const mechanic of map.cfg.mechanics ?? []) {
     if (typeIdx === data.coinEnemyIdx) {
       continue;
@@ -1892,13 +1906,34 @@ function enemyAct(state: GameState, enemy: EnemyState): void {
     }
   }
   const moveSpeed = cfg.id === 'wolf' ? effectiveSpeed + Math.max(1, pm(effectiveSpeed, 1200 + enemy.traitTier * 250)) : effectiveSpeed;
-  const to = from + moveSpeed;
+  let to = from + moveSpeed;
   if (cfg.blockable) {
+    // 挤压碰撞：判定箱半格（500），不可越过同路径前方最近的地面敌人（同进度时 id 小者视为在前）
+    let aheadProgress = -1;
+    for (const other of state.enemies) {
+      if (other.id === enemy.id || other.hp === 0 || other.pathIdx !== enemy.pathIdx) {
+        continue;
+      }
+      if (!data.config.enemies[other.typeIdx].blockable) {
+        continue;
+      }
+      if (other.progress > from || (other.progress === from && other.id < enemy.id)) {
+        if (aheadProgress < 0 || other.progress < aheadProgress) {
+          aheadProgress = other.progress;
+        }
+      }
+    }
+    if (aheadProgress >= 0 && to > aheadProgress - 500) {
+      to = Math.max(from, aheadProgress - 500);
+    }
+    // 阻挡捕获：拦截点 = 近战单位所在格中心前一格（centerProgress - 1000，下限 0）。
+    // 若敌人已处于拦截点与单位格中心之间（落位推退/贴脸出生），原地立即进入阻挡。
     for (const cell of path.cells) {
       if (cell.centerProgress <= from) {
         continue;
       }
-      if (cell.centerProgress > to) {
+      const stop = Math.max(0, cell.centerProgress - 1000);
+      if (stop > to) {
         break;
       }
       const unit = findMeleeUnitAt(state, cell.row, cell.col);
@@ -1915,7 +1950,7 @@ function enemyAct(state: GameState, enemy: EnemyState): void {
       if (blockedCount >= blockLimit) {
         continue;
       }
-      enemy.progress = cell.centerProgress;
+      enemy.progress = stop > from ? stop : from;
       enemy.blockedBy = unit.id;
       return;
     }

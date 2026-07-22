@@ -1,5 +1,10 @@
 # 兑换码分发与活动平台
 
+> **当前本地运行入口已迁移为 Next.js + Go API/Worker + PostgreSQL + Redis + Caddy。**
+> 推荐直接运行 `powershell -ExecutionPolicy Bypass -File scripts/setup-local.ps1`，
+> 完整说明见 [`docs/local-development.md`](docs/local-development.md)。下方部分
+> Cloudflare/OpenNext 内容属于历史部署说明，不应作为当前本地初始化依据。
+
 一个以 **Next.js 16 + Cloudflare Workers/OpenNext** 为主部署形态的活动平台，最初用于兑换码分发，现已扩展为包含 **项目领取、直充、抽奖、多人抽奖、积分商城、卡牌、小游戏、公告、反馈墙、通知与管理后台** 的完整应用。
 
 > 当前仓库是 **Cloudflare-first** 方案：
