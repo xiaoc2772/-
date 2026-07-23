@@ -88,6 +88,194 @@ func cleanupHTTPTestPianoUser(t *testing.T, ctx context.Context, db *pgxpool.Poo
 	}
 }
 
+func TestPianoTilesHTTPStartRetryWithSameRequestIDIsIdempotent(t *testing.T) {
+	ctx := context.Background()
+	databaseURL := os.Getenv("TEST_DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("TEST_DATABASE_URL 未设置，跳过 PostgreSQL 集成测试")
+	}
+
+	db, err := dbpostgres.Open(ctx, databaseURL)
+	if err != nil {
+		t.Fatalf("open postgres failed: %v", err)
+	}
+	defer db.Close()
+	if _, err := pgmigration.NewRunner(db, httpMigrationsDir(t)).Apply(ctx, false); err != nil {
+		t.Fatalf("apply migrations failed: %v", err)
+	}
+
+	userID := int64(46501 + time.Now().UnixNano()%1_000_000_000)
+	cleanupHTTPTestPianoUser(t, ctx, db, userID)
+	defer cleanupHTTPTestPianoUser(t, ctx, db, userID)
+
+	handler := New(Dependencies{
+		Config: config.Config{SessionSecret: testSessionSecret},
+		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+		DB:     db,
+	})
+	chart := smallestPianoChart(t)
+	startBody := `{"chartId":"` + chart.ID + `","mode":"classic","checksum":"` + chart.Checksum + `","startRequestId":"start-retry-1"}`
+
+	first := performPianoTilesJSONRequest(handler, userID, http.MethodPost, "/api/games/piano-tiles/start", startBody)
+	if first.Code != http.StatusOK {
+		t.Fatalf("expected first start 200, got %d body=%s", first.Code, first.Body.String())
+	}
+	var firstPayload struct {
+		Success bool `json:"success"`
+		Data    struct {
+			SessionID string `json:"sessionId"`
+		} `json:"data"`
+	}
+	if err := json.NewDecoder(first.Body).Decode(&firstPayload); err != nil {
+		t.Fatalf("decode first start failed: %v", err)
+	}
+	if !firstPayload.Success || firstPayload.Data.SessionID == "" {
+		t.Fatalf("unexpected first start payload: %+v", firstPayload)
+	}
+
+	// 模拟客户端没有收到第一次响应后的安全重试：应返回同一会话，不能新增一局。
+	retry := performPianoTilesJSONRequest(handler, userID, http.MethodPost, "/api/games/piano-tiles/start", startBody)
+	if retry.Code != http.StatusOK {
+		t.Fatalf("expected same-request retry 200, got %d body=%s", retry.Code, retry.Body.String())
+	}
+	var retryPayload struct {
+		Success bool `json:"success"`
+		Data    struct {
+			SessionID string `json:"sessionId"`
+		} `json:"data"`
+	}
+	if err := json.NewDecoder(retry.Body).Decode(&retryPayload); err != nil {
+		t.Fatalf("decode retry start failed: %v", err)
+	}
+	if !retryPayload.Success || retryPayload.Data.SessionID != firstPayload.Data.SessionID {
+		t.Fatalf("same-request retry should reuse session: first=%q retry=%q", firstPayload.Data.SessionID, retryPayload.Data.SessionID)
+	}
+
+	var sessionCount, activeCount int
+	if err := db.QueryRow(ctx, `SELECT COUNT(*) FROM game_sessions WHERE user_id=$1 AND game_type=$2`, userID, pianotiles.GameType).Scan(&sessionCount); err != nil {
+		t.Fatalf("count game sessions failed: %v", err)
+	}
+	if err := db.QueryRow(ctx, `SELECT COUNT(*) FROM active_game_sessions WHERE user_id=$1 AND game_type=$2`, userID, pianotiles.GameType).Scan(&activeCount); err != nil {
+		t.Fatalf("count active sessions failed: %v", err)
+	}
+	if sessionCount != 1 || activeCount != 1 {
+		t.Fatalf("idempotent retry should keep one session and one active pointer: sessions=%d active=%d", sessionCount, activeCount)
+	}
+
+	// 不同请求标识不能接管现有会话，即使曲目和模式完全相同。
+	differentRequest := strings.Replace(startBody, "start-retry-1", "start-retry-2", 1)
+	different := performPianoTilesJSONRequest(handler, userID, http.MethodPost, "/api/games/piano-tiles/start", differentRequest)
+	if different.Code != http.StatusBadRequest || !strings.Contains(different.Body.String(), "你已有正在进行的游戏") {
+		t.Fatalf("different request id should be rejected, got %d body=%s", different.Code, different.Body.String())
+	}
+
+	// 一旦服务端确认了任何进度，原请求标识也不能再把它当成“未收到响应的空局”恢复。
+	eventBody := `{"sessionId":"` + firstPayload.Data.SessionID + `","events":` + hitPianoEventsJSON(chart, 1, false) + `}`
+	checkpoint := performPianoTilesJSONRequest(handler, userID, http.MethodPost, "/api/games/piano-tiles/checkpoint", eventBody)
+	if checkpoint.Code != http.StatusOK {
+		t.Fatalf("expected progress checkpoint 200, got %d body=%s", checkpoint.Code, checkpoint.Body.String())
+	}
+	afterProgress := performPianoTilesJSONRequest(handler, userID, http.MethodPost, "/api/games/piano-tiles/start", startBody)
+	if afterProgress.Code != http.StatusBadRequest || !strings.Contains(afterProgress.Body.String(), "你已有正在进行的游戏") {
+		t.Fatalf("request retry after confirmed progress should be rejected, got %d body=%s", afterProgress.Code, afterProgress.Body.String())
+	}
+}
+
+func TestPianoTilesHTTPStartClearsTerminalActivePointerWithoutDeletingSession(t *testing.T) {
+	ctx := context.Background()
+	databaseURL := os.Getenv("TEST_DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("TEST_DATABASE_URL 未设置，跳过 PostgreSQL 集成测试")
+	}
+
+	db, err := dbpostgres.Open(ctx, databaseURL)
+	if err != nil {
+		t.Fatalf("open postgres failed: %v", err)
+	}
+	defer db.Close()
+	if _, err := pgmigration.NewRunner(db, httpMigrationsDir(t)).Apply(ctx, false); err != nil {
+		t.Fatalf("apply migrations failed: %v", err)
+	}
+
+	userID := int64(46751 + time.Now().UnixNano()%1_000_000_000)
+	cleanupHTTPTestPianoUser(t, ctx, db, userID)
+	defer cleanupHTTPTestPianoUser(t, ctx, db, userID)
+
+	handler := New(Dependencies{
+		Config: config.Config{SessionSecret: testSessionSecret},
+		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+		DB:     db,
+	})
+	chart := smallestPianoChart(t)
+	firstBody := `{"chartId":"` + chart.ID + `","mode":"classic","checksum":"` + chart.Checksum + `","startRequestId":"terminal-active-1"}`
+	first := performPianoTilesJSONRequest(handler, userID, http.MethodPost, "/api/games/piano-tiles/start", firstBody)
+	if first.Code != http.StatusOK {
+		t.Fatalf("expected first start 200, got %d body=%s", first.Code, first.Body.String())
+	}
+	var firstPayload struct {
+		Data struct {
+			SessionID string `json:"sessionId"`
+		} `json:"data"`
+	}
+	if err := json.NewDecoder(first.Body).Decode(&firstPayload); err != nil {
+		t.Fatalf("decode first start failed: %v", err)
+	}
+	oldSessionID := firstPayload.Data.SessionID
+	if oldSessionID == "" {
+		t.Fatal("first start returned empty session id")
+	}
+
+	// 模拟历史异常：game_sessions 已进入终态，但 active 指针仍残留。
+	// payload 故意保持 playing，验证 SQL 状态也会被可信地识别为终态。
+	if _, err := db.Exec(ctx, `UPDATE game_sessions SET status=$1 WHERE id=$2 AND user_id=$3 AND game_type=$4`, string(pianotiles.StatusFailed), oldSessionID, userID, pianotiles.GameType); err != nil {
+		t.Fatalf("mark old session failed failed: %v", err)
+	}
+	var staleActiveID string
+	if err := db.QueryRow(ctx, `SELECT session_id FROM active_game_sessions WHERE user_id=$1 AND game_type=$2`, userID, pianotiles.GameType).Scan(&staleActiveID); err != nil {
+		t.Fatalf("load stale active pointer failed: %v", err)
+	}
+	if staleActiveID != oldSessionID {
+		t.Fatalf("expected stale active pointer %q, got %q", oldSessionID, staleActiveID)
+	}
+
+	secondBody := strings.Replace(firstBody, "terminal-active-1", "terminal-active-2", 1)
+	second := performPianoTilesJSONRequest(handler, userID, http.MethodPost, "/api/games/piano-tiles/start", secondBody)
+	if second.Code != http.StatusOK {
+		t.Fatalf("expected new start after terminal stale pointer 200, got %d body=%s", second.Code, second.Body.String())
+	}
+	var secondPayload struct {
+		Data struct {
+			SessionID string `json:"sessionId"`
+		} `json:"data"`
+	}
+	if err := json.NewDecoder(second.Body).Decode(&secondPayload); err != nil {
+		t.Fatalf("decode second start failed: %v", err)
+	}
+	newSessionID := secondPayload.Data.SessionID
+	if newSessionID == "" || newSessionID == oldSessionID {
+		t.Fatalf("expected a distinct new session, old=%q new=%q", oldSessionID, newSessionID)
+	}
+
+	var oldSessionCount, allSessionCount int
+	if err := db.QueryRow(ctx, `SELECT COUNT(*) FROM game_sessions WHERE id=$1 AND user_id=$2 AND game_type=$3 AND status=$4`, oldSessionID, userID, pianotiles.GameType, string(pianotiles.StatusFailed)).Scan(&oldSessionCount); err != nil {
+		t.Fatalf("verify old session failed: %v", err)
+	}
+	if err := db.QueryRow(ctx, `SELECT COUNT(*) FROM game_sessions WHERE user_id=$1 AND game_type=$2`, userID, pianotiles.GameType).Scan(&allSessionCount); err != nil {
+		t.Fatalf("count preserved sessions failed: %v", err)
+	}
+	if oldSessionCount != 1 || allSessionCount != 2 {
+		t.Fatalf("terminal session should be preserved beside new session: old=%d total=%d", oldSessionCount, allSessionCount)
+	}
+
+	var activeSessionID string
+	if err := db.QueryRow(ctx, `SELECT session_id FROM active_game_sessions WHERE user_id=$1 AND game_type=$2`, userID, pianotiles.GameType).Scan(&activeSessionID); err != nil {
+		t.Fatalf("load replacement active pointer failed: %v", err)
+	}
+	if activeSessionID != newSessionID {
+		t.Fatalf("active pointer should target new session: got=%q want=%q", activeSessionID, newSessionID)
+	}
+}
+
 func TestPianoTilesHTTPCompleteGameAndReplayDuplicateSettlement(t *testing.T) {
 	ctx := context.Background()
 	databaseURL := os.Getenv("TEST_DATABASE_URL")

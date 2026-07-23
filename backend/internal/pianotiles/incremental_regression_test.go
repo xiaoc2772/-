@@ -362,4 +362,81 @@ func TestCurrentSessionChartRejectsChangedOrRemovedChart(t *testing.T) {
 	}
 }
 
+func TestCanRecoverStartRequiresMatchingEmptySession(t *testing.T) {
+	chart := mustChart("101")
+	base := Session{
+		Status:         StatusPlaying,
+		ChartID:        chart.ID,
+		Checksum:       chart.Checksum,
+		Mode:           ModeClassic,
+		StartRequestID: "request-1",
+	}
+	input := StartInput{
+		ChartID:        chart.ID,
+		Checksum:       chart.Checksum,
+		Mode:           ModeClassic,
+		StartRequestID: "request-1",
+	}
+	if !canRecoverStart(base, input) {
+		t.Fatal("同一请求标识、曲目、模式和 checksum 的空 playing 会话应可恢复")
+	}
+
+	cases := map[string]func(*Session, *StartInput){
+		"空请求标识":       func(session *Session, in *StartInput) { in.StartRequestID = "" },
+		"不同请求标识":      func(session *Session, in *StartInput) { in.StartRequestID = "request-2" },
+		"不同曲目":        func(session *Session, in *StartInput) { in.ChartID = "102" },
+		"不同模式":        func(session *Session, in *StartInput) { in.Mode = ModeRush },
+		"不同 checksum": func(session *Session, in *StartInput) { in.Checksum = "deadbeef" },
+		"终态会话":        func(session *Session, in *StartInput) { session.Status = StatusFailed },
+	}
+	for name, mutate := range cases {
+		t.Run(name, func(t *testing.T) {
+			session := base
+			in := input
+			mutate(&session, &in)
+			if canRecoverStart(session, in) {
+				t.Fatalf("%s 不应恢复", name)
+			}
+		})
+	}
+}
+
+func TestCanRecoverStartRejectsAnyConfirmedProgress(t *testing.T) {
+	chart := mustChart("101")
+	input := StartInput{
+		ChartID:        chart.ID,
+		Checksum:       chart.Checksum,
+		Mode:           ModeClassic,
+		StartRequestID: "request-1",
+	}
+	progressCases := map[string]func(*Session){
+		"事件计数":   func(session *Session) { session.Replay.EventCount = 1 },
+		"命中数":    func(session *Session) { session.Replay.Hits = 1 },
+		"已验证分数":  func(session *Session) { session.Replay.VerifiedScore = 1 },
+		"长按命中数":  func(session *Session) { session.Replay.HoldHits = 1 },
+		"事件标记":   func(session *Session) { session.Replay.HasEvents = true },
+		"最后事件时间": func(session *Session) { session.Replay.LastEventT = 1 },
+		"命中标记":   func(session *Session) { session.Replay.HasHits = true },
+		"最后命中时间": func(session *Session) { session.Replay.LastHitT = 1 },
+		"终止判定":   func(session *Session) { session.Replay.Terminal = JudgementWrong },
+		"最近事件窗口": func(session *Session) { session.Replay.RecentEventTimes = []int64{1} },
+		"上一批摘要":  func(session *Session) { session.LastBatch = &BatchReceipt{Count: 1, Hash: "hash"} },
+	}
+	for name, markProgress := range progressCases {
+		t.Run(name, func(t *testing.T) {
+			session := Session{
+				Status:         StatusPlaying,
+				ChartID:        chart.ID,
+				Checksum:       chart.Checksum,
+				Mode:           ModeClassic,
+				StartRequestID: "request-1",
+			}
+			markProgress(&session)
+			if canRecoverStart(session, input) {
+				t.Fatalf("存在%s证据时不应恢复", name)
+			}
+		})
+	}
+}
+
 func int64Ptr(value int64) *int64 { return &value }

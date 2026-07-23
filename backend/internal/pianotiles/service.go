@@ -21,6 +21,9 @@ import (
 
 const (
 	cooldownSeconds = 5
+	// startRequestId 只用于一次开局请求的安全幂等重试；限制长度避免把
+	// 未受信任的客户端标识无限写入会话 JSON。
+	maxStartRequestIDLength = 128
 	// 48 小时滑动租期覆盖长局及长时间暂停；绝对上限避免僵尸会话永久占用账号。
 	sessionTTL    = 48 * time.Hour
 	maxSessionAge = 7 * 24 * time.Hour
@@ -39,6 +42,10 @@ func (s *Service) Start(ctx context.Context, user auth.User, in StartInput) (Sta
 	}
 	in.ChartID = strings.TrimSpace(in.ChartID)
 	in.Checksum = strings.ToLower(strings.TrimSpace(in.Checksum))
+	in.StartRequestID = strings.TrimSpace(in.StartRequestID)
+	if len(in.StartRequestID) > maxStartRequestIDLength {
+		return StartResult{Message: "无效的开局请求标识"}, nil
+	}
 	chart, ok := ChartSummaryFor(in.ChartID)
 	if !ok {
 		return StartResult{Message: "谱面不存在"}, nil
@@ -68,11 +75,15 @@ func (s *Service) Start(ctx context.Context, user auth.User, in StartInput) (Sta
 			return err
 		}
 		if active != nil {
+			if canRecoverStart(*active, in) {
+				out = StartResult{Success: true, Session: active}
+				return nil
+			}
 			out = StartResult{Message: "你已有正在进行的游戏"}
 			return nil
 		}
 		now := time.Now()
-		session := Session{ID: randomID(), UserID: user.ID, GameType: GameType, Version: Version, ChartID: in.ChartID, Checksum: chart.Checksum, Mode: in.Mode, StartedAt: now.UnixMilli(), ExpiresAt: sessionExpiry(now, now), Status: StatusPlaying, Replay: ReplayState{}}
+		session := Session{ID: randomID(), UserID: user.ID, GameType: GameType, Version: Version, StartRequestID: in.StartRequestID, ChartID: in.ChartID, Checksum: chart.Checksum, Mode: in.Mode, StartedAt: now.UnixMilli(), ExpiresAt: sessionExpiry(now, now), Status: StatusPlaying, Replay: ReplayState{}}
 		if err := saveSession(ctx, tx, session); err != nil {
 			return err
 		}
@@ -540,6 +551,35 @@ func submitDelta(session Session, requested *int64, submitted []Event) ([]Event,
 }
 
 func mustChart(id string) ChartSummary { c, _ := ChartSummaryFor(id); return c }
+
+// canRecoverStart 只识别同一次客户端开局请求的无进度重试。
+// startRequestId 必须非空且完全一致，避免另一个标签页恰好选择同一谱面和模式时
+// 接管尚未上报 checkpoint 的真实对局。
+func canRecoverStart(session Session, in StartInput) bool {
+	return session.Status == StatusPlaying &&
+		in.StartRequestID != "" &&
+		session.StartRequestID == in.StartRequestID &&
+		session.ChartID == in.ChartID &&
+		session.Mode == in.Mode &&
+		session.Checksum == in.Checksum &&
+		!sessionHasConfirmedProgress(session)
+}
+
+func sessionHasConfirmedProgress(session Session) bool {
+	replay := session.Replay
+	return replay.EventCount != 0 ||
+		replay.Hits != 0 ||
+		replay.VerifiedScore != 0 ||
+		replay.HoldHits != 0 ||
+		replay.HasEvents ||
+		replay.LastEventT != 0 ||
+		replay.HasHits ||
+		replay.LastHitT != 0 ||
+		replay.Terminal != "" ||
+		len(replay.RecentEventTimes) != 0 ||
+		session.LastBatch != nil
+}
+
 func viewOf(s Session) SessionView {
 	return SessionView{SessionID: s.ID, ChartID: s.ChartID, Mode: s.Mode, StartedAt: s.StartedAt}
 }
@@ -619,8 +659,16 @@ func activeSession(ctx context.Context, tx pgx.Tx, id int64) (*Session, error) {
 	}
 	if session == nil {
 		// 外键正常时不会发生；若历史数据不一致，只清理这条孤儿 active 指针。
-		_, err = tx.Exec(ctx, `DELETE FROM active_game_sessions WHERE user_id=$1 AND game_type=$2 AND session_id=$3`, id, GameType, sid)
+		err = deleteActiveSessionPointer(ctx, tx, id, sid)
 		return nil, err
+	}
+	if session.Status != StatusPlaying {
+		// 终态会话可能已有正常结算记录。这里只移除异常残留的 active 指针，
+		// 保留 game_sessions 与 game_records 供审计和幂等查询。
+		if err := deleteActiveSessionPointer(ctx, tx, id, sid); err != nil {
+			return nil, err
+		}
+		return nil, nil
 	}
 	now := time.Now()
 	if session.Version != Version || sessionExpired(*session, now) {
@@ -645,8 +693,9 @@ func activeSession(ctx context.Context, tx pgx.Tx, id int64) (*Session, error) {
 	return session, nil
 }
 func sessionForUpdate(ctx context.Context, tx pgx.Tx, uid int64, sid string) (*Session, error) {
+	var storedStatus string
 	var raw []byte
-	err := tx.QueryRow(ctx, `SELECT payload FROM game_sessions WHERE id=$1 AND user_id=$2 AND game_type=$3 FOR UPDATE`, sid, uid, GameType).Scan(&raw)
+	err := tx.QueryRow(ctx, `SELECT status,payload FROM game_sessions WHERE id=$1 AND user_id=$2 AND game_type=$3 FOR UPDATE`, sid, uid, GameType).Scan(&storedStatus, &raw)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
 	}
@@ -656,6 +705,11 @@ func sessionForUpdate(ctx context.Context, tx pgx.Tx, uid int64, sid string) (*S
 	var s Session
 	if err = json.Unmarshal(raw, &s); err != nil {
 		return nil, err
+	}
+	// 任一持久化状态已经进入终态，都不能再把该会话视为 playing。
+	// 正常写入会同步两处；该分支只用于容忍历史异常数据。
+	if Status(storedStatus) != StatusPlaying {
+		s.Status = Status(storedStatus)
 	}
 	return &s, nil
 }
@@ -678,10 +732,15 @@ func updateSession(ctx context.Context, tx pgx.Tx, s Session) error {
 func deleteSession(ctx context.Context, tx pgx.Tx, uid int64, sid string) error {
 	// 只删除仍指向该 session 的 active 行，避免迟到的旧会话请求误删同一用户
 	// 后来已经创建的新会话。
-	if _, err := tx.Exec(ctx, `DELETE FROM active_game_sessions WHERE user_id=$1 AND game_type=$2 AND session_id=$3`, uid, GameType, sid); err != nil {
+	if err := deleteActiveSessionPointer(ctx, tx, uid, sid); err != nil {
 		return err
 	}
 	_, err := tx.Exec(ctx, `DELETE FROM game_sessions WHERE id=$1 AND user_id=$2 AND game_type=$3`, sid, uid, GameType)
+	return err
+}
+
+func deleteActiveSessionPointer(ctx context.Context, tx pgx.Tx, uid int64, sid string) error {
+	_, err := tx.Exec(ctx, `DELETE FROM active_game_sessions WHERE user_id=$1 AND game_type=$2 AND session_id=$3`, uid, GameType, sid)
 	return err
 }
 

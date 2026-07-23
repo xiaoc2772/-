@@ -48,8 +48,10 @@
 `activeSession` 非空时为 `{ "sessionId": "...", "chartId": "101", "mode": "classic", "startedAt": <ms> }`。
 
 ### POST /api/games/piano-tiles/start
-请求：`{ "chartId": "101", "mode": "classic" | "rush", "checksum": "8 位十六进制" }`
+请求：`{ "chartId": "101", "mode": "classic" | "rush", "checksum": "8 位十六进制", "startRequestId": "客户端一次开局的唯一标识" }`
 - 校验 chartId 存在于 embed 谱面表、checksum 与服务端记录一致（不一致 → 400 `chart checksum mismatch`，表示前端资产被篡改或版本不一致）
+- `startRequestId` 为可选兼容字段；新客户端必须在同一次自动/手动重试中复用同一值。若首次响应丢失，服务端会返回已经创建且尚无确认进度的同一会话，不会误建第二局
+- 不同 `startRequestId`、请求参数不一致或会话已有确认进度时仍按“已有活跃会话”拒绝，避免跨标签页接管真实对局
 - 冷却中 / 已有活跃会话按 minesweeper 语义处理
 - 响应：`{ "success": true, "data": { "sessionId": "...", "startedAt": <server ms> } }`
 

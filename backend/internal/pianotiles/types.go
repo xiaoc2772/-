@@ -52,18 +52,22 @@ type BatchReceipt struct {
 }
 
 type Session struct {
-	ID        string        `json:"id"`
-	UserID    int64         `json:"userId"`
-	GameType  string        `json:"gameType"`
-	Version   int           `json:"version"`
-	ChartID   string        `json:"chartId"`
-	Checksum  string        `json:"checksum"`
-	Mode      Mode          `json:"mode"`
-	StartedAt int64         `json:"startedAt"`
-	ExpiresAt int64         `json:"expiresAt"`
-	Status    Status        `json:"status"`
-	Replay    ReplayState   `json:"replay"`
-	LastBatch *BatchReceipt `json:"lastBatch,omitempty"`
+	ID       string `json:"id"`
+	UserID   int64  `json:"userId"`
+	GameType string `json:"gameType"`
+	Version  int    `json:"version"`
+	// StartRequestID 是客户端一次“开局请求”的幂等标识。
+	// 只有同一标识的重试才允许复用尚未产生事件的会话，避免两个标签页
+	// 同时选择同一首歌时误把另一局当成网络重试。
+	StartRequestID string        `json:"startRequestId,omitempty"`
+	ChartID        string        `json:"chartId"`
+	Checksum       string        `json:"checksum"`
+	Mode           Mode          `json:"mode"`
+	StartedAt      int64         `json:"startedAt"`
+	ExpiresAt      int64         `json:"expiresAt"`
+	Status         Status        `json:"status"`
+	Replay         ReplayState   `json:"replay"`
+	LastBatch      *BatchReceipt `json:"lastBatch,omitempty"`
 }
 
 type SessionView struct {
@@ -127,9 +131,10 @@ type PersonalBestsData struct {
 }
 
 type StartInput struct {
-	ChartID  string `json:"chartId"`
-	Mode     Mode   `json:"mode"`
-	Checksum string `json:"checksum"`
+	ChartID        string `json:"chartId"`
+	Mode           Mode   `json:"mode"`
+	Checksum       string `json:"checksum"`
+	StartRequestID string `json:"startRequestId,omitempty"`
 }
 type StartResult struct {
 	Success bool

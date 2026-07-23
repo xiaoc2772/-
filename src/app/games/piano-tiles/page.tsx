@@ -57,6 +57,12 @@ import {
   type PianoTilesEvent,
   type PianoTilesSubmitPayload,
 } from '@/lib/piano-tiles/session';
+import {
+  isPianoStartRequestError,
+  preparePianoStartAttempt,
+  startPianoTilesWithRetry,
+  type PianoStartAttempt,
+} from '@/lib/piano-tiles/start-recovery';
 
 // ──────────────────────────────────────────────────
 // 常量（视觉尺寸对齐钢琴块2：720×1280 竖屏设计分辨率）
@@ -236,6 +242,8 @@ export default function PianoTilesPage() {
   const submittedRef = useRef(false);
   const submitInFlightRef = useRef(false);
   const startInFlightRef = useRef(false);
+  const startAttemptRef = useRef<PianoStartAttempt | null>(null);
+  const initialSessionCleanupRef = useRef<Promise<void>>(Promise.resolve());
   const pendingSubmissionRef = useRef<PersistedPianoTilesSubmission | null>(null);
   const modeRef = useRef<PianoTilesMode>('classic');
   const runRef = useRef<RunState>(freshRunState());
@@ -293,36 +301,45 @@ export default function PianoTilesPage() {
         }
       }
 
+      // 只清理当前标签页自己记录的残留会话。其他标签页没有相同的
+      // sessionStorage 标记，不能因为看到服务端存在活动会话就擅自取消。
+      // 已有终局提交包时必须保留会话供幂等重试。
+      const cleanupPromise =
+        restored || !ownedSessionId
+          ? Promise.resolve()
+          : (async () => {
+              try {
+                const res = await fetchGameRequest(`${API_BASE}/status`);
+                const data = await res.json().catch(() => null);
+                const staleSessionId = data?.data?.activeSession?.sessionId;
+                if (
+                  !cancelled &&
+                  !sessionRef.current &&
+                  res.ok &&
+                  shouldCancelOwnedPianoTilesSession(ownedSessionId, staleSessionId)
+                ) {
+                  await fetchGameRequest(`${API_BASE}/cancel`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ sessionId: ownedSessionId }),
+                  });
+                }
+                if (!cancelled && res.ok) clearActivePianoTilesSession(storage);
+              } catch {
+                // 未登录或网络异常时忽略；若仍有残留会话，开局时会收到明确错误
+              }
+            })();
+      // 状态清理与曲目清单并行加载，但真正 POST /start 前必须等待清理结束，
+      // 避免 status/cancel 在新会话创建后才返回并误取消刚开始的游戏。
+      initialSessionCleanupRef.current = cleanupPromise;
+
       try {
         const m = await fetchManifest();
         if (!cancelled) setManifest(m);
       } catch (err) {
         if (!cancelled) setError(gameRequestErrorMessage(err, '加载曲目清单超时', '加载曲目清单失败'));
       }
-      // 只清理当前标签页自己记录的残留会话。其他标签页没有相同的
-      // sessionStorage 标记，不能因为看到服务端存在活动会话就擅自取消。
-      if (restored) return;
-      if (!ownedSessionId) return;
-      try {
-        const res = await fetchGameRequest(`${API_BASE}/status`);
-        const data = await res.json().catch(() => null);
-        const staleSessionId = data?.data?.activeSession?.sessionId;
-        if (
-          !cancelled &&
-          !sessionRef.current &&
-          res.ok &&
-          shouldCancelOwnedPianoTilesSession(ownedSessionId, staleSessionId)
-        ) {
-          await fetchGameRequest(`${API_BASE}/cancel`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ sessionId: ownedSessionId }),
-          });
-        }
-        if (!cancelled && res.ok) clearActivePianoTilesSession(storage);
-      } catch {
-        // 未登录或网络异常时忽略；若仍有残留会话，开局时会收到明确错误
-      }
+      await cleanupPromise;
     })();
     return () => {
       cancelled = true;
@@ -1182,22 +1199,35 @@ export default function PianoTilesPage() {
         await sampler.preload(chart, (loaded, total) =>
           setLoadProgress(total > 0 ? loaded / total : 1),
         );
+        await initialSessionCleanupRef.current;
 
-        const res = await fetchGameRequest(`${API_BASE}/start`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ chartId: entry.id, mode, checksum: chart.checksum }),
+        const startAttempt = preparePianoStartAttempt(
+          startAttemptRef.current,
+          entry.id,
+          mode,
+          chart.checksum,
+        );
+        startAttemptRef.current = startAttempt;
+        const started = await startPianoTilesWithRetry({
+          requestId: startAttempt.requestId,
+          // 自动补发只允许一次；若仍不确定，用户下一次点击会复用同一个 ID，
+          // 但不会再次在后台连续发送两次请求。
+          allowAutomaticRetry: !startAttempt.automaticRetryUsed,
+          send: (startRequestId) => fetchGameRequest(`${API_BASE}/start`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              chartId: entry.id,
+              mode,
+              checksum: chart.checksum,
+              startRequestId,
+            }),
+          }),
         });
-        const data = await res.json().catch(() => null);
-        if (res.ok && data?.data?.sessionId) {
-          sessionRef.current = { sessionId: data.data.sessionId };
-          saveActivePianoTilesSession(getPianoSessionStorage(), data.data.sessionId);
-          lastCheckpointAtRef.current = Date.now();
-        } else if (res.status === 401) {
-          throw new Error('请先登录后开始游戏');
-        } else {
-          throw new Error(data?.message ?? `开局失败（HTTP ${res.status}），请稍后重试`);
-        }
+        startAttempt.automaticRetryUsed ||= started.automaticRetryUsed;
+        sessionRef.current = { sessionId: started.sessionId };
+        saveActivePianoTilesSession(getPianoSessionStorage(), started.sessionId);
+        lastCheckpointAtRef.current = Date.now();
 
         engineRef.current = createEngine(chart, mode);
         // 相机定位：「开始」块底边停在屏幕 70% 高度处等待点击
@@ -1218,7 +1248,16 @@ export default function PianoTilesPage() {
           );
         }
         setPhase('playing');
+        startAttemptRef.current = null;
       } catch (err) {
+        const startError = isPianoStartRequestError(err) ? err : null;
+        const startAttempt = startAttemptRef.current;
+        if (startAttempt && startError) {
+          startAttempt.automaticRetryUsed ||= startError.automaticRetryUsed;
+          if (!startError.uncertain) startAttemptRef.current = null;
+        } else if (!startError) {
+          startAttemptRef.current = null;
+        }
         const failedSession = sessionRef.current;
         sessionRef.current = null;
         if (failedSession) {
