@@ -115,7 +115,24 @@ func parseLoginUser(raw json.RawMessage) (User, error) {
 	if err := json.Unmarshal(raw, &data); err != nil {
 		return User{}, err
 	}
-	user := User{
+	user := userFromMap(data)
+	if user.ID <= 0 || user.Username == "" {
+		// 新版 new-api（认证重构后）登录成功时用户资料嵌套在 data.user，顶层为 access_token 等令牌信息
+		if nested, ok := data["user"].(map[string]any); ok {
+			user = userFromMap(nested)
+		}
+	}
+	if user.ID <= 0 || user.Username == "" {
+		return User{}, errors.New("new-api login response has invalid user data")
+	}
+	if user.DisplayName == "" {
+		user.DisplayName = user.Username
+	}
+	return user, nil
+}
+
+func userFromMap(data map[string]any) User {
+	return User{
 		ID:          readInt64(data["id"]),
 		Username:    strings.TrimSpace(readString(data["username"])),
 		DisplayName: strings.TrimSpace(readString(data["display_name"])),
@@ -125,13 +142,6 @@ func parseLoginUser(raw json.RawMessage) (User, error) {
 		Quota:       readInt64(data["quota"]),
 		UsedQuota:   readInt64(data["used_quota"]),
 	}
-	if user.ID <= 0 || user.Username == "" {
-		return User{}, errors.New("new-api login response has invalid user data")
-	}
-	if user.DisplayName == "" {
-		user.DisplayName = user.Username
-	}
-	return user, nil
 }
 
 func readString(value any) string {
