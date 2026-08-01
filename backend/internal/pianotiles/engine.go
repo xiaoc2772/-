@@ -21,8 +21,9 @@ const (
 	EventTimeGraceMS   = int64(5_000)
 	MaxEventsPerSecond = 30
 	MaxEventsPerBatch  = 2_048
-	// 前端每帧先按 speedMultiplier 推进相机，追赶阶段最多再推进 3 倍，
-	// speedMultiplier 本身最高为 3，因此相机相对墙钟的理论推进上限为 12 倍。
+	// 当前客户端恒速滚动，相机推进上限即 speedMultiplier 上限（3 倍）；
+	// 历史客户端存在追块加速（最多再推进 3 倍、合计 12 倍），
+	// 保留 12 作为兼容旧客户端的宽松上界。
 	MaxCameraAdvanceRate = int64(12)
 	// 前端事件时间由 Math.round 生成，边界处允许 1ms 取整误差。
 	EarlyHitRoundingGraceMS = int64(1)

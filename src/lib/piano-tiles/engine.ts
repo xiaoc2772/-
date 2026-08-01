@@ -136,8 +136,8 @@ export function createEngine(chart: CompiledChart, mode: PianoTilesMode): PianoT
   let tilesHit = 0;
   let lap = 0;
   let lastCamera = 0;
-  /** 活跃长按：从按下时刻起算进度，随相机推进逐步计分。 */
-  let hold: { tile: Tile; granted: number; startCam: number } | null = null;
+  /** 活跃长按：随相机推进逐步计分。fillStartMs 为填充起点（提前按下时=按下时刻）。 */
+  let hold: { tile: Tile; granted: number; fillStartMs: number } | null = null;
 
   const tileAt = (index: number): Tile | null => {
     if (notes.length === 0) return null;
@@ -149,11 +149,14 @@ export function createEngine(chart: CompiledChart, mode: PianoTilesMode): PianoT
   const viewWindowMs = () => VIEW_UNITS * unitMs;
   const isHold = (tile: Tile) => tile.index >= 0 && tile.d >= HOLD_UNITS_THRESHOLD * unitMs;
 
-  /** 长按进度：从按下时刻起算，相机到达块尾时恰好填满。 */
+  /**
+   * 长按进度：从填充起点起算，速率恒等于相机速度（填满耗时 = 块高对应的滚动时间）。
+   * 提前按下立即开始填充，不必等相机滚到块首，避免"按下没反应"的迟滞感。
+   */
   const holdProgress = (cameraMs: number): number => {
     if (!hold) return 0;
-    const total = Math.max(1, hold.tile.t + hold.tile.d - hold.startCam);
-    return Math.max(0, Math.min(1, (cameraMs - hold.startCam) / total));
+    const total = Math.max(1, hold.tile.d);
+    return Math.max(0, Math.min(1, (cameraMs - hold.fillStartMs) / total));
   };
 
   /** 按进度补发长按加分（逐步入账，HUD 分数随按住时间增长）。 */
@@ -165,7 +168,7 @@ export function createEngine(chart: CompiledChart, mode: PianoTilesMode): PianoT
       hold.granted = due;
     }
     // 划完整块自动结束长按
-    if (cameraMs >= hold.tile.t + hold.tile.d) hold = null;
+    if (cameraMs >= hold.fillStartMs + hold.tile.d) hold = null;
   };
 
   const engine: PianoTilesEngine = {
@@ -206,7 +209,7 @@ export function createEngine(chart: CompiledChart, mode: PianoTilesMode): PianoT
       nextIndex += 1;
       tilesHit += 1;
       score += 1;
-      if (isHold(tile)) hold = { tile, granted: 0, startCam: cameraMs };
+      if (isHold(tile)) hold = { tile, granted: 0, fillStartMs: Math.min(cameraMs, tile.t) };
       const newLap = Math.floor(nextIndex / notes.length);
       if (newLap > lap) lap = newLap;
       return { kind: 'hit', tile, scoreDelta: 1 };

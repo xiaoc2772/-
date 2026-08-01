@@ -105,14 +105,24 @@ export function isPianoCheckpointRetryPrefix(
   );
 }
 
+/** 服务端相邻命中事件的最小间隔毫秒（backend MinHitIntervalMS）。 */
+export const PIANO_MIN_HIT_INTERVAL_MS = 25;
+
 /**
- * 合并长按释放返回值与引擎实际分数增量。
- * 长按在 tick 内自动划满时，release() 可能因内部状态已清空而返回 0，
- * 此时必须保留已经计入引擎总分的奖励。
+ * 事件时间钳制：保证事件时间单调不减，且相邻命中至少间隔 PIANO_MIN_HIT_INTERVAL_MS。
+ * 多指快速点击可能在同一毫秒（取整后）产生两个命中，不钳制会被服务端
+ * 以 hit_interval_too_short / event_time_not_monotonic 拒绝。
+ * @param lastHitT 上一条命中事件的钳制后时间；尚无命中时为 -1。
  */
-export function resolvePianoHoldBonus(explicitBonus: number | undefined, inferredBonus: number): number {
-  const resolved = Math.max(explicitBonus ?? 0, inferredBonus);
-  return Math.max(0, Math.min(HOLD_BONUS_MAX, Math.floor(resolved)));
+export function clampPianoEventTime(
+  rawT: number,
+  isHit: boolean,
+  lastEventT: number,
+  lastHitT: number,
+): number {
+  let t = Math.max(rawT, lastEventT);
+  if (isHit && lastHitT >= 0) t = Math.max(t, lastHitT + PIANO_MIN_HIT_INTERVAL_MS);
+  return t;
 }
 
 function isFiniteInt(value: unknown, min = 0): value is number {
