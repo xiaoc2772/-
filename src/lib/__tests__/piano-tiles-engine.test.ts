@@ -208,20 +208,32 @@ describe('长按块', () => {
     expect(engine.isHold(hold)).toBe(true);
   });
 
-  test('长按从按下瞬间起算进度，划到块尾自动结束且不增加竞争分', () => {
+  test('长按填充按下即开始、速率等于相机速度，划满自动结束且不增加竞争分', () => {
     const chart = makeChart([{ t: 500, lane: 0, d: UNIT * 4 }]);
     const engine = begin(createEngine(chart, 'classic'));
-    engine.tap(0, 300); // 按下时刻 camera=300，块尾在 1500
+    engine.tap(0, 300); // 提前按下：fillStart=300，填满耗时 = d = 1000ms
     expect(engine.holdState(300)!.progress).toBe(0);
     expect(engine.score).toBe(1);
 
-    // total = 1500-300 = 1200；camera=900 → progress = 600/1200 = 0.5
+    // progress = (camera - fillStart) / d = (900-300)/1000 = 0.6
     engine.tick(900);
     const mid = engine.holdState(900)!;
-    expect(mid.progress).toBeCloseTo(0.5);
+    expect(mid.progress).toBeCloseTo(0.6);
     expect(engine.score).toBe(1);
 
-    engine.tick(1500); // 到块尾：自动结束
+    engine.tick(1300); // fillStart + d = 1300：自动结束
+    expect(engine.holdState(1300)).toBeNull();
+    expect(engine.score).toBe(1);
+  });
+
+  test('迟按长按块：填充从块首起算，按下瞬间已带部分进度', () => {
+    const chart = makeChart([{ t: 500, lane: 0, d: UNIT * 4 }]);
+    const engine = begin(createEngine(chart, 'classic'));
+    engine.tap(0, 600); // 迟于块首 100ms（MISS_GRACE_MS 内）：fillStart 钳回 t=500
+    expect(engine.holdState(600)!.progress).toBeCloseTo(0.1); // (600-500)/1000
+    expect(engine.score).toBe(1);
+
+    engine.tick(1500); // fillStart + d = 1500：自动结束
     expect(engine.holdState(1500)).toBeNull();
     expect(engine.score).toBe(1);
   });
@@ -230,7 +242,7 @@ describe('长按块', () => {
     const chart = makeChart([{ t: 500, lane: 0, d: UNIT * 4 }]);
     const engine = begin(createEngine(chart, 'classic'));
     engine.tap(0, 300);
-    const granted = engine.release(600); // progress = 300/1200 = 0.25
+    const granted = engine.release(600); // progress = (600-300)/1000 = 0.3
     expect(granted).toBe(0);
     expect(engine.holdState(600)).toBeNull();
     expect(engine.status).toBe('running');

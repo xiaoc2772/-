@@ -29,6 +29,8 @@ interface ResultCardProps {
   primaryAction?: {
     label: string;
     onClick: () => void;
+    /** 置灰不可点（如结算冷却倒计时）。 */
+    disabled?: boolean;
   };
   /** 次按钮 */
   secondaryAction?: {
@@ -167,7 +169,8 @@ export default function ResultCard({
                 <button
                   type="button"
                   onClick={primaryAction.onClick}
-                  className="flex-1 rounded-xl bg-emerald-600 hover:bg-emerald-500 active:bg-emerald-700 px-4 py-3 text-sm font-semibold text-white shadow-lg shadow-emerald-600/30 transition-all hover:-translate-y-0.5"
+                  disabled={primaryAction.disabled}
+                  className="flex-1 rounded-xl bg-emerald-600 hover:bg-emerald-500 active:bg-emerald-700 px-4 py-3 text-sm font-semibold text-white shadow-lg shadow-emerald-600/30 transition-all hover:-translate-y-0.5 disabled:cursor-not-allowed disabled:bg-slate-300 disabled:shadow-none disabled:hover:translate-y-0 disabled:hover:bg-slate-300"
                 >
                   {primaryAction.label}
                 </button>

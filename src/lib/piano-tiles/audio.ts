@@ -69,6 +69,7 @@ export class PianoSampler {
     }
   }
 
+  /** whenSec 为 AudioContext 绝对时钟（currentTime 时间域）；0 表示立即播放。 */
   private play(key: string, whenSec = 0, gain = 1) {
     const ctx = this.ctx;
     const buffer = this.buffers.get(key);
@@ -84,6 +85,17 @@ export class PianoSampler {
   /** 立即演奏一组音（击中音块时调用）。 */
   playPitches(pitches: string[], instrument = 'piano', gain = 1) {
     for (const p of pitches) this.play(`${instrument}/${p}`, 0, gain);
+  }
+
+  /**
+   * 按延迟精确调度一组音（伴奏前瞻调度用）：
+   * 基于 AudioContext 硬件时钟，不受渲染帧率抖动影响。
+   */
+  playPitchesAt(pitches: string[], instrument: string, gain: number, delayMs: number) {
+    const ctx = this.ctx;
+    if (!ctx) return;
+    const when = ctx.currentTime + Math.max(0, delayMs) / 1000;
+    for (const p of pitches) this.play(`${instrument}/${p}`, when, gain);
   }
 
   playSfx(name: string) {

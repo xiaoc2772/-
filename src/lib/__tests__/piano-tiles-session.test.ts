@@ -1,13 +1,14 @@
 import { describe, expect, it } from 'vitest';
 import {
+  clampPianoEventTime,
   clearActivePianoTilesSession,
   clearPendingPianoTilesSubmission,
   isPianoCheckpointRetryPrefix,
+  PIANO_MIN_HIT_INTERVAL_MS,
   PIANO_TILES_ACTIVE_SESSION_KEY,
   PIANO_TILES_PENDING_SUBMISSION_KEY,
   readActivePianoTilesSession,
   readPendingPianoTilesSubmission,
-  resolvePianoHoldBonus,
   saveActivePianoTilesSession,
   savePendingPianoTilesSubmission,
   shouldCancelOwnedPianoTilesSession,
@@ -77,11 +78,21 @@ describe('钢琴块终局提交包', () => {
     expect(isPianoCheckpointRetryPrefix([{ ...first }], pending)).toBe(false);
   });
 
-  it('服务端权威计时落地前不会保存客户端长按奖励', () => {
-    expect(resolvePianoHoldBonus(0, 3)).toBe(0);
-    expect(resolvePianoHoldBonus(2, 2)).toBe(0);
-    expect(resolvePianoHoldBonus(undefined, -1)).toBe(0);
-    expect(resolvePianoHoldBonus(9, 9)).toBe(0);
+  it('事件时间钳制为单调不减（允许相等）', () => {
+    expect(clampPianoEventTime(90, false, 100, -1)).toBe(100);
+    expect(clampPianoEventTime(100, false, 100, -1)).toBe(100);
+    expect(clampPianoEventTime(130, false, 100, -1)).toBe(130);
+  });
+
+  it('相邻命中至少间隔 PIANO_MIN_HIT_INTERVAL_MS，首个命中不受约束', () => {
+    expect(clampPianoEventTime(101, true, 100, 100)).toBe(100 + PIANO_MIN_HIT_INTERVAL_MS);
+    expect(clampPianoEventTime(200, true, 100, 100)).toBe(200);
+    expect(clampPianoEventTime(3, true, 0, -1)).toBe(3);
+  });
+
+  it('非命中事件不受命中间隔约束，仅保持单调', () => {
+    expect(clampPianoEventTime(101, false, 100, 100)).toBe(101);
+    expect(clampPianoEventTime(50, false, 100, 100)).toBe(100);
   });
 
   it('可以保存并恢复增量提交包', () => {
