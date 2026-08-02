@@ -34,13 +34,14 @@ func TestNormalizedPerformanceClassicUsesFullLapScore(t *testing.T) {
 			{T: 1_000, Lane: 1, Duration: 400},
 		},
 	}
-	if got := MaxLapScore(chart); got != 2 {
-		t.Fatalf("MaxLapScore() = %d, want 2", got)
+	// 第二块 d=400 >= 1.75*200 为长按：满圈分 = 2 次命中 + 划满奖励 2。
+	if got := MaxLapScore(chart); got != 2+HoldBonusMax {
+		t.Fatalf("MaxLapScore() = %d, want %d", got, 2+HoldBonusMax)
 	}
-	if got := NormalizedPerformance(chart, ModeClassic, 2); got != PerformanceReference {
+	if got := NormalizedPerformance(chart, ModeClassic, 2+HoldBonusMax); got != PerformanceReference {
 		t.Fatalf("one perfect lap = %d, want %d", got, PerformanceReference)
 	}
-	if got := NormalizedPerformance(chart, ModeClassic, 4); got != 2*PerformanceReference {
+	if got := NormalizedPerformance(chart, ModeClassic, 2*(2+HoldBonusMax)); got != 2*PerformanceReference {
 		t.Fatalf("two perfect laps = %d, want %d", got, 2*PerformanceReference)
 	}
 }
@@ -62,7 +63,7 @@ func TestNormalizedPerformanceRushUsesSixtySecondReference(t *testing.T) {
 	}
 }
 
-func TestRushReferenceScoreIgnoresUnverifiedHoldBonus(t *testing.T) {
+func TestRushReferenceScoreCountsPartialHoldProgress(t *testing.T) {
 	chart := ChartSummary{
 		DurationMs: 70_000,
 		UnitMs:     1_000,
@@ -71,8 +72,9 @@ func TestRushReferenceScoreIgnoresUnverifiedHoldBonus(t *testing.T) {
 			{T: 59_000, Lane: 1, Duration: 2_000},
 		},
 	}
-	// 当前版本只计算两个可命中的音块，不把客户端长按时长换成额外分。
-	if got := RushReferenceScore(chart); got != 2 {
-		t.Fatalf("RushReferenceScore() = %d, want 2", got)
+	// 60 秒截止时长按只划过一半（1000/2000）：按进度阶梯折算奖励 1，
+	// 参考分 = 2 次命中 + 1。
+	if got := RushReferenceScore(chart); got != 3 {
+		t.Fatalf("RushReferenceScore() = %d, want 3", got)
 	}
 }

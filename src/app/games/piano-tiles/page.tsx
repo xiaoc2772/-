@@ -24,6 +24,12 @@ import {
 import { ResultCard } from '../_components';
 import { CancelConfirmModal } from '../_components/CancelConfirmModal';
 import { fetchGameRequest, gameRequestErrorMessage } from '../_lib/request';
+import {
+  advanceAccompanimentFollower,
+  createAccompanimentFollower,
+  noteAccompanimentHit,
+  type AccompanimentFollowerState,
+} from '@/lib/piano-tiles/accompaniment';
 import { fetchChart, fetchManifest, PianoSampler } from '@/lib/piano-tiles/audio';
 import {
   createEngine,
@@ -37,7 +43,6 @@ import {
   type Tile,
 } from '@/lib/piano-tiles/engine';
 import type {
-  AccompanimentNote,
   ChartManifest,
   ChartManifestEntry,
   CompiledChart,
@@ -138,8 +143,8 @@ interface RunState {
   holding: boolean;
   /** 正在长按的块（用于结束后生成灰色残影）。 */
   activeHold: Tile | null;
-  accIndex: number;
-  accLap: number;
+  /** 弹性伴奏跟随器：伴奏播放头随玩家点击进度调速。 */
+  acc: AccompanimentFollowerState;
   failFlash: null | { lane: number; tileTop: number; tileH: number; at: number };
   /** 已击中的音块：变灰并随画面继续滚出（原作手感）。 */
   hitFades: Array<{ tile: Tile; at: number }>;
@@ -155,8 +160,7 @@ function freshRunState(): RunState {
     wallElapsed: 0,
     holding: false,
     activeHold: null,
-    accIndex: 0,
-    accLap: 0,
+    acc: createAccompanimentFollower(0),
     failFlash: null,
     hitFades: [],
   };
@@ -192,7 +196,7 @@ const MODE_META: Record<
     durationPill: '无限循环',
     summary: '跟随旋律无限演奏，点错或漏块即结束本局。',
     stats: [
-      { name: '计分', value: '每块 +1 · 长按不额外计分' },
+      { name: '计分', value: '每块 +1 · 长按按住越满分越高（最高 3 分）' },
       { name: '皇冠', value: `每圈 1 顶 · 最多 ${MAX_CROWNS} 顶` },
       { name: '节奏', value: `每圈提速 ${Math.round(LAP_SPEED_STEP * 100)}%` },
     ],
@@ -206,7 +210,7 @@ const MODE_META: Record<
     stats: [
       { name: '时限', value: `${Math.round(RUSH_DURATION_MS / 1000)} 秒到时自动结算` },
       { name: '判定', value: '与经典一致 · 失误即结束' },
-      { name: '计分', value: '每块 +1 · 长按不额外计分' },
+      { name: '计分', value: '每块 +1 · 长按按住越满分越高（最高 3 分）' },
     ],
   },
 };
@@ -454,6 +458,14 @@ export default function PianoTilesPage() {
     if (event.j === 'h') lastHitTRef.current = t;
   }, []);
 
+  /** 长按结束统一上报：松手事件（r）携带按住进度对应的奖励分，服务端按墙钟时长复核。 */
+  const queueHoldRelease = useCallback(
+    (lane: number, bonus: number) => {
+      queueEvent({ t: Math.round(runRef.current.wallElapsed), lane, j: 'r', b: bonus });
+    },
+    [queueEvent],
+  );
+
   const checkpointScheduledRef = useRef(false);
   const flushCheckpoint = useCallback((force = false) => {
     const session = sessionRef.current;
@@ -631,10 +643,17 @@ export default function PianoTilesPage() {
         window.clearInterval(checkpointTimerRef.current);
         checkpointTimerRef.current = null;
       }
-      // timeup / 漏块可能与长按同帧发生；长按事件已在按下时入队，这里只需结束按住状态。
+      // timeup 可能与长按同帧发生；长按按下事件已入队，这里结清奖励并补发
+      // 松手事件（timeup 无 terminal 事件，r 可以是最后一条）。
       if (runRef.current.holding) {
-        engine.release(runRef.current.cameraMs);
+        const holdLane = runRef.current.activeHold?.lane;
+        const bonus = engine.release(runRef.current.cameraMs);
+        if (holdLane !== undefined) queueHoldRelease(holdLane, bonus);
         runRef.current.holding = false;
+      }
+      const endedAtFinish = engine.takeEndedHold();
+      if (endedAtFinish && engine.status === 'timeup') {
+        queueHoldRelease(endedAtFinish.tile.lane, endedAtFinish.bonus);
       }
       activeHoldPointerIdRef.current = null;
       pendingRollRef.current = null;
@@ -688,7 +707,7 @@ export default function PianoTilesPage() {
       persistLatestSubmission();
       await submitPendingResult();
     },
-    [persistLatestSubmission, selected, submitPendingResult, syncHud],
+    [persistLatestSubmission, queueHoldRelease, selected, submitPendingResult, syncHud],
   );
 
   /** 冻结一局正在进行的演奏；返回是否确实从运行态进入了暂停态。 */
@@ -700,16 +719,19 @@ export default function PianoTilesPage() {
     pausedRef.current = true;
     setPaused(true);
     cancelAnimationFrame(rafRef.current);
-    // 暂停覆盖层会拦截 pointerup；长按事件已在按下时入队，这里直接按当前进度结束长按。
+    // 暂停覆盖层会拦截 pointerup；长按按下事件已入队，这里按当前进度结清
+    // 长按并补发松手事件。
     if (run.holding) {
-      engine.release(run.cameraMs);
+      const holdLane = run.activeHold?.lane;
+      const bonus = engine.release(run.cameraMs);
+      if (holdLane !== undefined) queueHoldRelease(holdLane, bonus);
       run.holding = false;
     }
     activeHoldPointerIdRef.current = null;
     pendingRollRef.current = null;
     void samplerRef.current?.suspend();
     return true;
-  }, []);
+  }, [queueHoldRelease]);
 
   const pauseForFrameStall = useCallback(() => {
     if (!pauseActiveRun()) return false;
@@ -781,39 +803,33 @@ export default function PianoTilesPage() {
             return;
           }
         }
-        // 伴奏跟随相机进度播放（跨圈循环）：前瞻窗口内的音符交给
-        // AudioContext 硬件时钟精确定时，消除逐帧触发造成的最多一帧滞后。
-        // 音乐节奏因此完全由板面滚动速度驱动，随提速渐变一起变快。
-        const lapMs = engine.lapDurationMs();
-        const acc: AccompanimentNote[] = chart.accompaniment;
-        const speed = run.speed;
-        const horizonMs = run.cameraMs + ACC_LOOKAHEAD_MS * speed;
-        let guard = 0;
-        while (acc.length > 0 && guard < 64) {
-          const note = acc[run.accIndex];
-          const noteTime = note.t + run.accLap * lapMs;
-          if (noteTime > horizonMs) break;
-          // 相机大跳帧（掉帧恢复/追块突进）时跳过已明显过期的音符，
-          // 避免积压的伴奏在同一帧以零延迟齐鸣爆音。
-          if (noteTime >= run.cameraMs - 50 * speed) {
-            const delayMs = Math.max(0, noteTime - run.cameraMs) / speed;
-            samplerRef.current?.playPitchesAt(note.pitches, note.instrument, 0.45, delayMs);
-          }
-          run.accIndex += 1;
-          if (run.accIndex >= acc.length) {
-            run.accIndex = 0;
-            run.accLap += 1;
-          }
-          guard += 1;
+        // 伴奏跟随玩家点击进度（弹性追赶）：点得快伴奏加速追上，点得慢伴奏在
+        // 下一待击块前沿等待；前瞻窗口内的音符仍交给 AudioContext 硬件时钟
+        // 精确定时，消除逐帧触发造成的最多一帧滞后。
+        const followed = advanceAccompanimentFollower(run.acc, chart.accompaniment, {
+          dtMs: dt,
+          speed: run.speed,
+          cameraMs: run.cameraMs,
+          nextTileMs: engine.nextTile()?.t ?? Number.POSITIVE_INFINITY,
+          lapMs: engine.lapDurationMs(),
+          lookaheadMs: ACC_LOOKAHEAD_MS,
+        });
+        run.acc = followed.state;
+        for (const item of followed.schedule) {
+          samplerRef.current?.playPitchesAt(item.note.pitches, item.note.instrument, 0.45, item.delayMs);
         }
         // 漏块检查
         if (engine.tick(run.cameraMs)) {
-          // tick 可能在同一帧结束长按并判定下一块漏掉；长按事件已在按下时入队，
-          // 这里只需结束按住状态，再追加 terminal 漏块事件。
+          // tick 可能在同一帧结束长按并判定下一块漏掉；长按按下事件已入队，
+          // 这里结清长按奖励并补发松手事件——必须先于 terminal 漏块事件。
           if (run.holding) {
-            engine.release(run.cameraMs);
+            const holdLane = run.activeHold?.lane;
+            const bonus = engine.release(run.cameraMs);
+            if (holdLane !== undefined) queueHoldRelease(holdLane, bonus);
             run.holding = false;
           }
+          const endedBeforeMiss = engine.takeEndedHold();
+          if (endedBeforeMiss) queueHoldRelease(endedBeforeMiss.tile.lane, endedBeforeMiss.bonus);
           const missed = engine.nextTile();
           if (missed) {
             queueEvent({
@@ -831,6 +847,10 @@ export default function PianoTilesPage() {
               at: frameTime,
             };
           }
+        } else {
+          // 划满自动结束的长按在此补发松手事件（点按结束的路径各自就地补发）。
+          const endedHold = engine.takeEndedHold();
+          if (endedHold) queueHoldRelease(endedHold.tile.lane, endedHold.bonus);
         }
       }
       const camera = run.cameraMs;
@@ -1042,7 +1062,7 @@ export default function PianoTilesPage() {
         void finishGame(engine);
       }
     },
-    [finishGame, pauseForFrameStall, queueEvent, syncHud],
+    [finishGame, pauseForFrameStall, queueEvent, queueHoldRelease, syncHud],
   );
 
   // ── 输入 ────────────────────────────────────────
@@ -1111,8 +1131,13 @@ export default function PianoTilesPage() {
     } else if (outcome.kind === 'hit') {
       samplerRef.current?.playPitches(outcome.tile.pitches);
       vibrate(12);
-      // 长按加分恒为 0，长按事件与普通命中一样在按下时立即入队，
-      // 从而允许长按期间用另一根手指继续点击后续音块（多指演奏）。
+      // 伴奏跟随：以本次命中重锚玩家相对相机的领先量
+      run.acc = noteAccompanimentHit(run.acc, outcome.tile.t, run.cameraMs);
+      // 长按按下事件立即入队（b 恒为 0，奖励由松手事件上报），允许长按期间
+      // 用另一根手指继续点击后续音块（多指演奏）。旧长按若刚划满或被本次
+      // 按下顶替，其松手事件必须先于本次命中入队，服务端才能按序复核。
+      const endedByTap = engine.takeEndedHold();
+      if (endedByTap) queueHoldRelease(endedByTap.tile.lane, endedByTap.bonus);
       queueEvent({ t: now, lane, j: 'h', b: 0 });
       if (engine.isHold(outcome.tile)) {
         // 长按块：进入按住状态，块保持显示并随进度填充，结束后再生成残影。
@@ -1143,10 +1168,22 @@ export default function PianoTilesPage() {
         if (roll.released && run.holding && activeHoldPointerIdRef.current === roll.pointerId) {
           run.holding = false;
           activeHoldPointerIdRef.current = null;
-          engine.release(run.cameraMs);
+          const holdLane = run.activeHold?.lane;
+          const bonus = engine.release(run.cameraMs);
+          if (holdLane !== undefined) queueHoldRelease(holdLane, bonus);
         }
       }
     } else if (outcome.kind === 'wrong') {
+      // 点错终局：另一根手指的长按先结清并补发松手事件（terminal 必须是最后一条）。
+      if (run.holding) {
+        const holdLane = run.activeHold?.lane;
+        const bonus = engine.release(run.cameraMs);
+        if (holdLane !== undefined) queueHoldRelease(holdLane, bonus);
+        run.holding = false;
+        activeHoldPointerIdRef.current = null;
+      }
+      const endedBeforeWrong = engine.takeEndedHold();
+      if (endedBeforeWrong) queueHoldRelease(endedBeforeWrong.tile.lane, endedBeforeWrong.bonus);
       queueEvent({ t: now, lane, j: 'w', b: 0 });
       samplerRef.current?.playSfx('miss');
       vibrate([40, 30, 40]);
@@ -1168,7 +1205,7 @@ export default function PianoTilesPage() {
         at: inputTime,
       };
     }
-  }, [finishGame, pauseActiveRun, pauseForFrameStall, queueEvent, syncHud]);
+  }, [finishGame, pauseActiveRun, pauseForFrameStall, queueEvent, queueHoldRelease, syncHud]);
 
   useEffect(() => {
     pointerDownFnRef.current = pointerDown;
@@ -1185,9 +1222,24 @@ export default function PianoTilesPage() {
     activeHoldPointerIdRef.current = null;
     if (!run.holding || !engine) return;
     run.holding = false;
-    engine.release(run.cameraMs);
+    if (run.started && engine.status === 'running') {
+      // 松手时间使用真实抬起时刻，供服务端按墙钟间隔复核长按进度；单次前移
+      // 与帧卡顿熔断上限对齐（更长的卡顿由暂停机制接管，不得烙进时间线），
+      // rush 模式再钳制在 60 秒内，避免卡顿跨越终点时 r 事件超出结算窗口。
+      const liftedMs = Math.min(
+        performance.now() - run.wallStart,
+        run.wallElapsed + FRAME_STALL_PAUSE_MS,
+      );
+      run.wallElapsed = Math.max(
+        run.wallElapsed,
+        modeRef.current === 'rush' ? Math.min(liftedMs, RUSH_DURATION_MS) : liftedMs,
+      );
+    }
+    const holdLane = run.activeHold?.lane;
+    const bonus = engine.release(run.cameraMs);
+    if (holdLane !== undefined) queueHoldRelease(holdLane, bonus);
     // 残影由渲染循环在检测到长按结束时统一生成
-  }, []);
+  }, [queueHoldRelease]);
 
   // ── 暂停 / 继续（冻结音乐、计时与判定） ──────────
   const pauseGame = useCallback(() => {
@@ -1351,6 +1403,8 @@ export default function PianoTilesPage() {
         const firstTile = engineRef.current.nextTile();
         if (firstTile) {
           runRef.current.cameraMs = firstTile.t - engineRef.current.viewWindowMs() * 0.3;
+          // 伴奏播放头与相机同点起步，之后随玩家点击进度弹性调速
+          runRef.current.acc = createAccompanimentFollower(runRef.current.cameraMs);
         }
         if (sessionRef.current) {
           checkpointTimerRef.current = window.setInterval(
@@ -1887,7 +1941,7 @@ export default function PianoTilesPage() {
               </div>
                 </div>
                 <p className="piano-stage-hint">
-                  长按滑轨音块需持续按住 · 当前版本每个音块统一计 1 分 · 失误立即结束
+                  长按滑轨音块需持续按住 · 按住过半 2 分、划满 3 分 · 失误立即结束
                 </p>
               </div>
             </div>
@@ -3157,7 +3211,7 @@ function PianoRulesModal({ onClose }: { onClose: () => void }) {
           <PianoRuleCard
             icon={<Sparkles />}
             title="长按音块"
-            text="带粉橙色滑轨的长音块点中后需按住不放。当前版本暂不把长按时长计入积分或排行榜。"
+            text="带粉橙色滑轨的长音块点中后需按住不放。按住进度不足一半计 1 分，过半计 2 分，划满整块计 3 分。"
           />
           <PianoRuleCard
             icon={<X />}

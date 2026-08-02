@@ -11,16 +11,20 @@ import (
 
 const (
 	ViewWindowMS = int64(2_200)
-	// 客户端无法证明真实按住时长；在服务端权威计时协议落地前，
-	// 长按只保留交互效果，不计入积分和排行榜，避免伪造奖励。
-	HoldBonusMax       = int64(0)
-	MaxCrowns          = 3
-	MinHitIntervalMS   = int64(25)
-	LapTailMinimumMS   = int64(400)
-	RushDurationMS     = int64(60_000)
-	EventTimeGraceMS   = int64(5_000)
-	MaxEventsPerSecond = 30
-	MaxEventsPerBatch  = 2_048
+	// 长按奖励（服务端权威计时）：长按块按下上报 h(b=0)，结束时上报 r(b=0..2)；
+	// 服务端用 r 与按下的墙钟间隔按当圈速度换算进度复核——
+	// 进度 <50% 奖励 0、>=50% 奖励 1、划满奖励 2（对应总分 1/2/3）。
+	HoldBonusMax = int64(2)
+	// 长按进度复核宽限（谱面毫秒）：吸收迟按填充回溯（<=120ms 谱面时间）、
+	// 事件时间钳制（按下最多 +25ms 墙钟）与帧量化/取整误差在 3 倍速下的放大。
+	HoldProgressGraceMS = int64(300)
+	MaxCrowns           = 3
+	MinHitIntervalMS    = int64(25)
+	LapTailMinimumMS    = int64(400)
+	RushDurationMS      = int64(60_000)
+	EventTimeGraceMS    = int64(5_000)
+	MaxEventsPerSecond  = 30
+	MaxEventsPerBatch   = 2_048
 	// 当前客户端恒速滚动，相机推进上限即 speedMultiplier 上限（3 倍）；
 	// 历史客户端存在追块加速（最多再推进 3 倍、合计 12 倍），
 	// 保留 12 作为兼容旧客户端的宽松上界。
@@ -36,7 +40,7 @@ func IsValidationError(err error) bool     { var target *ValidationError; return
 func IsMode(mode Mode) bool                { return mode == ModeClassic || mode == ModeRush }
 func IsStatus(status Status) bool          { return status == StatusFailed || status == StatusTimeUp }
 func IsJudgement(j Judgement) bool {
-	return j == JudgementHit || j == JudgementMiss || j == JudgementWrong
+	return j == JudgementHit || j == JudgementMiss || j == JudgementWrong || j == JudgementRelease
 }
 
 func LapDurationMS(chart ChartSummary) int64 {
@@ -119,7 +123,7 @@ func AdvanceReplayState(chart ChartSummary, mode Mode, current ReplayState, even
 
 		switch event.Judgement {
 		case JudgementHit:
-			note, globalTime, _ := tileAt(chart, state.Hits)
+			note, globalTime, lap := tileAt(chart, state.Hits)
 			if event.Lane != note.Lane {
 				return ReplayState{}, validationError("hit_lane_mismatch", fmt.Sprintf("第 %d 个命中事件轨道不匹配", state.Hits+1))
 			}
@@ -130,23 +134,41 @@ func AdvanceReplayState(chart ChartSummary, mode Mode, current ReplayState, even
 			if event.T > globalTime+ViewWindowMS+EventTimeGraceMS {
 				return ReplayState{}, validationError("hit_too_late", fmt.Sprintf("第 %d 个命中事件超过节奏上限", state.Hits+1))
 			}
-			if event.HoldBonus < 0 || event.HoldBonus > HoldBonusMax {
-				return ReplayState{}, validationError("invalid_hold_bonus", "当前版本不接受客户端长按奖励")
-			}
-			isHold := isHoldNote(chart, note)
-			if event.HoldBonus > 0 && !isHold {
-				return ReplayState{}, validationError("hold_bonus_on_tap", "普通音块不能获得长按奖励")
+			if event.HoldBonus != 0 {
+				return ReplayState{}, validationError("invalid_hold_bonus", "长按奖励只能由松手事件上报")
 			}
 			if state.HasHits && event.T-state.LastHitT < MinHitIntervalMS {
 				return ReplayState{}, validationError("hit_interval_too_short", "相邻命中事件间隔过短")
 			}
 			state.Hits++
-			if isHold {
+			if isHoldNote(chart, note) {
 				state.HoldHits++
+				// 不上报松手事件的旧客户端直接按下一个长按：上一个视为已结束（奖励 0）。
+				state.HoldOpen = true
+				state.HoldPressT = event.T
+				state.HoldDurationMS = note.Duration
+				state.HoldLane = note.Lane
+				state.HoldLap = lap
 			}
-			state.VerifiedScore += 1 + event.HoldBonus
+			state.VerifiedScore++
 			state.HasHits = true
 			state.LastHitT = event.T
+		case JudgementRelease:
+			if event.HoldBonus < 0 || event.HoldBonus > HoldBonusMax {
+				return ReplayState{}, validationError("invalid_hold_bonus", "长按奖励超出允许范围")
+			}
+			if !state.HoldOpen {
+				return ReplayState{}, validationError("release_without_hold", "没有进行中的长按，不能上报松手事件")
+			}
+			if event.Lane != state.HoldLane {
+				return ReplayState{}, validationError("release_lane_mismatch", "松手事件轨道与长按块不匹配")
+			}
+			if event.HoldBonus > maxHoldBonus(state, event.T) {
+				return ReplayState{}, validationError("hold_bonus_too_high", "长按奖励超过按住时长可验证的上限")
+			}
+			state.VerifiedScore += event.HoldBonus
+			state.HoldOpen = false
+			state.HoldPressT, state.HoldDurationMS, state.HoldLane, state.HoldLap = 0, 0, 0, 0
 		case JudgementMiss, JudgementWrong:
 			if event.HoldBonus != 0 {
 				return ReplayState{}, validationError("terminal_bonus_invalid", "失败事件不能包含长按奖励")
@@ -254,6 +276,29 @@ func validateReplayChart(chart ChartSummary) error {
 func isHoldNote(chart ChartSummary, note ChartNote) bool {
 	// 4*d >= 7*unitMs 等价于 d >= 1.75*unitMs，避免浮点误差。
 	return note.Duration*4 >= chart.UnitMs*7
+}
+
+// maxHoldBonus 按松手与按下事件的墙钟间隔换算长按进度，返回可验证的奖励上限。
+// 相机每真实毫秒推进 speedMultiplier 谱面毫秒（1 + 0.12*圈数，封顶 3 倍），
+// 长按填充速率恒等于相机速度。校验速度取按下圈 +2 圈的目标速度上界：
+// 填充可能跨圈（相机越界至多 1 圈，多指抢点最多再推进 1 圈），跨圈后客户端
+// 相机会在 1.5 秒内渐变到新圈速度，按上界速度信用可避免误判压线划满的
+// 诚实玩家（校验失败会作废整局）；换来的作弊余量只是稍早领到本就能通过
+// 真实按住获得的奖励，不抬高分数上限。
+func maxHoldBonus(state ReplayState, releaseT int64) int64 {
+	speedNum := int64(100 + 12*(state.HoldLap+2))
+	if speedNum > 300 {
+		speedNum = 300
+	}
+	credited := (releaseT-state.HoldPressT)*speedNum/100 + HoldProgressGraceMS
+	switch {
+	case credited >= state.HoldDurationMS:
+		return 2
+	case credited*2 >= state.HoldDurationMS:
+		return 1
+	default:
+		return 0
+	}
 }
 
 // earliestHitTimeMS 返回当前前端实现下，指定音块最早可能被看到并命中的墙钟时间。

@@ -19,6 +19,9 @@ const (
 	JudgementHit   Judgement = "h"
 	JudgementMiss  Judgement = "m"
 	JudgementWrong Judgement = "w"
+	// JudgementRelease 是长按松手事件：客户端在长按结束（松手/划满/被顶替）时上报，
+	// b 为按住进度对应的奖励分，服务端按与按下事件的墙钟间隔复核。
+	JudgementRelease Judgement = "r"
 )
 
 // Event 是客户端上报的判定事件。T 为玩家点击开始块后的墙钟毫秒。
@@ -26,7 +29,7 @@ type Event struct {
 	T         int64     `json:"t"`
 	Lane      int       `json:"lane"`
 	Judgement Judgement `json:"j"`
-	// HoldBonus 为兼容旧事件格式保留；当前服务端仅接受 0。
+	// HoldBonus 仅松手事件（r）允许非零：0=进度<50%，1=进度>=50%，2=划满。
 	HoldBonus int64 `json:"b,omitempty"`
 }
 
@@ -42,6 +45,12 @@ type ReplayState struct {
 	LastHitT         int64     `json:"lastHitT"`
 	Terminal         Judgement `json:"terminal,omitempty"`
 	RecentEventTimes []int64   `json:"recentEventTimes,omitempty"`
+	// 进行中的长按（等待松手事件）：跨 checkpoint 持久化，供 r 事件复核奖励。
+	HoldOpen       bool  `json:"holdOpen,omitempty"`
+	HoldPressT     int64 `json:"holdPressT,omitempty"`
+	HoldDurationMS int64 `json:"holdDurationMs,omitempty"`
+	HoldLane       int   `json:"holdLane,omitempty"`
+	HoldLap        int   `json:"holdLap,omitempty"`
 }
 
 // BatchReceipt 仅保存上一批 checkpoint 的摘要，用于响应丢失后的幂等重试。

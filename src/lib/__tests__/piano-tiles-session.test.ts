@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { HOLD_BONUS_MAX } from '@/lib/piano-tiles/engine';
 import {
   clampPianoEventTime,
   clearActivePianoTilesSession,
@@ -110,6 +111,49 @@ describe('钢琴块终局提交包', () => {
         payload: {
           ...sample.payload,
           events: [{ t: 100, lane: 0, j: 'm', b: 3 }],
+        },
+      }),
+    );
+    expect(readPendingPianoTilesSubmission(storage)).toBeNull();
+  });
+
+  it('长按松手事件（r）随提交包恢复，非法奖励被拒绝', () => {
+    const storage = createStorage();
+    const withRelease: PersistedPianoTilesSubmission = {
+      ...sample,
+      payload: {
+        ...sample.payload,
+        events: [
+          { t: 100, lane: 0, j: 'h', b: 0 },
+          { t: 900, lane: 0, j: 'r', b: HOLD_BONUS_MAX },
+          { t: 2_000, lane: 2, j: 'm', b: 0 },
+        ],
+      },
+    };
+    expect(savePendingPianoTilesSubmission(storage, withRelease)).toBe(true);
+    expect(readPendingPianoTilesSubmission(storage)).toEqual(withRelease);
+
+    // 松手奖励超出上限
+    storage.setItem(
+      PIANO_TILES_PENDING_SUBMISSION_KEY,
+      JSON.stringify({
+        ...sample,
+        payload: {
+          ...sample.payload,
+          events: [{ t: 900, lane: 0, j: 'r', b: HOLD_BONUS_MAX + 1 }],
+        },
+      }),
+    );
+    expect(readPendingPianoTilesSubmission(storage)).toBeNull();
+
+    // 命中事件不得携带奖励（奖励只能由松手事件上报）
+    storage.setItem(
+      PIANO_TILES_PENDING_SUBMISSION_KEY,
+      JSON.stringify({
+        ...sample,
+        payload: {
+          ...sample.payload,
+          events: [{ t: 100, lane: 0, j: 'h', b: 1 }],
         },
       }),
     );

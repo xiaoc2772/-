@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'vitest';
 import {
   createEngine,
+  HOLD_BONUS_MAX,
   HOLD_UNITS_THRESHOLD,
   LAP_SPEED_STEP,
   MAX_CROWNS,
@@ -208,37 +209,41 @@ describe('长按块', () => {
     expect(engine.isHold(hold)).toBe(true);
   });
 
-  test('长按填充按下即开始、速率等于相机速度，划满自动结束且不增加竞争分', () => {
+  test('长按填充按下即开始，过半 +1、划满共 +2，自动结束后移交待补发松手', () => {
     const chart = makeChart([{ t: 500, lane: 0, d: UNIT * 4 }]);
     const engine = begin(createEngine(chart, 'classic'));
     engine.tap(0, 300); // 提前按下：fillStart=300，填满耗时 = d = 1000ms
     expect(engine.holdState(300)!.progress).toBe(0);
     expect(engine.score).toBe(1);
 
-    // progress = (camera - fillStart) / d = (900-300)/1000 = 0.6
+    // progress = (camera - fillStart) / d = (900-300)/1000 = 0.6 >= 50% → +1
     engine.tick(900);
     const mid = engine.holdState(900)!;
     expect(mid.progress).toBeCloseTo(0.6);
-    expect(engine.score).toBe(1);
+    expect(engine.score).toBe(2);
 
-    engine.tick(1300); // fillStart + d = 1300：自动结束
+    engine.tick(1300); // fillStart + d = 1300：划满自动结束，共 +2
     expect(engine.holdState(1300)).toBeNull();
-    expect(engine.score).toBe(1);
+    expect(engine.score).toBe(3);
+    const ended = engine.takeEndedHold();
+    expect(ended?.bonus).toBe(HOLD_BONUS_MAX);
+    expect(engine.takeEndedHold()).toBeNull(); // 每次结束只能取走一次
   });
 
-  test('迟按长按块：填充从块首起算，按下瞬间已带部分进度', () => {
+  test('迟按长按块：填充从块首起算，划满仍可得满奖励', () => {
     const chart = makeChart([{ t: 500, lane: 0, d: UNIT * 4 }]);
     const engine = begin(createEngine(chart, 'classic'));
     engine.tap(0, 600); // 迟于块首 100ms（MISS_GRACE_MS 内）：fillStart 钳回 t=500
     expect(engine.holdState(600)!.progress).toBeCloseTo(0.1); // (600-500)/1000
     expect(engine.score).toBe(1);
 
-    engine.tick(1500); // fillStart + d = 1500：自动结束
+    engine.tick(1500); // fillStart + d = 1500：划满自动结束
     expect(engine.holdState(1500)).toBeNull();
-    expect(engine.score).toBe(1);
+    expect(engine.score).toBe(3);
+    expect(engine.takeEndedHold()?.bonus).toBe(HOLD_BONUS_MAX);
   });
 
-  test('提前松手结束长按且不额外计分', () => {
+  test('提前松手：进度不足 50% 无奖励', () => {
     const chart = makeChart([{ t: 500, lane: 0, d: UNIT * 4 }]);
     const engine = begin(createEngine(chart, 'classic'));
     engine.tap(0, 300);
@@ -247,6 +252,42 @@ describe('长按块', () => {
     expect(engine.holdState(600)).toBeNull();
     expect(engine.status).toBe('running');
     expect(engine.score).toBe(1 + granted);
+  });
+
+  test('过半松手得 1 分奖励（总分 2）', () => {
+    const chart = makeChart([{ t: 500, lane: 0, d: UNIT * 4 }]);
+    const engine = begin(createEngine(chart, 'classic'));
+    engine.tap(0, 300);
+    const granted = engine.release(850); // progress = (850-300)/1000 = 0.55
+    expect(granted).toBe(1);
+    expect(engine.score).toBe(2);
+    expect(engine.takeEndedHold()).toBeNull(); // 显式松手不重复移交
+  });
+
+  test('划满后才松手：release 代收待补发奖励且不重复', () => {
+    const chart = makeChart([{ t: 500, lane: 0, d: UNIT * 4 }]);
+    const engine = begin(createEngine(chart, 'classic'));
+    engine.tap(0, 300);
+    engine.tick(1300); // 划满自动结束，奖励移交待补发
+    const granted = engine.release(1400);
+    expect(granted).toBe(HOLD_BONUS_MAX);
+    expect(engine.takeEndedHold()).toBeNull();
+    expect(engine.score).toBe(3);
+  });
+
+  test('新长按顶替旧长按：旧块按当前进度结清并移交待补发', () => {
+    const chart = makeChart([
+      { t: 500, lane: 0, d: UNIT * 4 },
+      { t: 1500, lane: 1, d: UNIT * 4 },
+    ]);
+    const engine = begin(createEngine(chart, 'classic'));
+    engine.tap(0, 500); // fillStart = 500
+    engine.tap(1, 1100); // 顶替：旧块 progress = (1100-500)/1000 = 0.6 → 奖励 1
+    const ended = engine.takeEndedHold();
+    expect(ended?.tile.lane).toBe(0);
+    expect(ended?.bonus).toBe(1);
+    expect(engine.holdState(1100)?.tile.lane).toBe(1); // 新长按已激活
+    expect(engine.score).toBe(3); // 两次命中 + 旧块过半奖励
   });
 });
 

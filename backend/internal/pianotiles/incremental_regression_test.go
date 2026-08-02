@@ -128,20 +128,21 @@ func TestIncrementalReplayHoldThresholdUsesExactIntegerBoundary(t *testing.T) {
 		t.Fatal("4*d=7*unit 应识别为长按块")
 	}
 	state, err := AdvanceReplayState(boundary, ModeClassic, ReplayState{}, []Event{
-		{T: 0, Lane: 0, Judgement: JudgementHit, HoldBonus: HoldBonusMax},
+		{T: 0, Lane: 0, Judgement: JudgementHit},
+		{T: 350, Lane: 0, Judgement: JudgementRelease, HoldBonus: HoldBonusMax},
 	})
 	if err != nil {
-		t.Fatalf("4*d=7*unit 的长按应通过: %v", err)
+		t.Fatalf("4*d=7*unit 的长按划满应通过: %v", err)
 	}
 	state, err = AdvanceReplayState(boundary, ModeClassic, state, []Event{
-		{T: 25, Lane: 1, Judgement: JudgementWrong},
+		{T: 375, Lane: 1, Judgement: JudgementWrong},
 	})
 	if err != nil {
-		t.Fatalf("长按命中后的终止事件应通过: %v", err)
+		t.Fatalf("长按收尾后的终止事件应通过: %v", err)
 	}
 	result, err := FinalizeReplayState(boundary, ModeClassic, state, ClientResult{
 		Status: StatusFailed, Score: 1 + HoldBonusMax, TilesHit: 1,
-		Crowns: 1, Laps: 1, PlayedMs: 25,
+		Crowns: 1, Laps: 1, PlayedMs: 375,
 	})
 	if err != nil {
 		t.Fatalf("边界长按应按精确奖励完成结算: %v", err)
@@ -155,9 +156,10 @@ func TestIncrementalReplayHoldThresholdUsesExactIntegerBoundary(t *testing.T) {
 		t.Fatal("4*d<7*unit 不应识别为长按块")
 	}
 	if _, err := AdvanceReplayState(below, ModeClassic, ReplayState{}, []Event{
-		{T: 0, Lane: 0, Judgement: JudgementHit, HoldBonus: 1},
+		{T: 0, Lane: 0, Judgement: JudgementHit},
+		{T: 349, Lane: 0, Judgement: JudgementRelease},
 	}); err == nil {
-		t.Fatal("4*d<7*unit 的普通块不应获得长按奖励")
+		t.Fatal("普通块命中后不应存在可收尾的长按")
 	}
 }
 
@@ -167,7 +169,226 @@ func TestIncrementalReplayRejectsClientReportedHoldBonus(t *testing.T) {
 		{T: 0, Lane: 0, Judgement: JudgementHit, HoldBonus: 1},
 	})
 	if err == nil || !IsValidationError(err) {
-		t.Fatalf("客户端上报长按奖励必须被拒绝，得到: %v", err)
+		t.Fatalf("命中事件携带长按奖励必须被拒绝，得到: %v", err)
+	}
+}
+
+func TestIncrementalReplayHoldReleaseBonusFollowsHeldDuration(t *testing.T) {
+	// unit 500、长按 d=2000，lap0 校验速度上界 124/100（+2 圈提速余量）：
+	// 奖励 1 需按住 >=565ms（565*1.24+300 过半），奖励 2 需 >=1371ms（划满）。
+	chart := regressionChart(1, 500, 2_000)
+	press := []Event{{T: 0, Lane: 0, Judgement: JudgementHit}}
+
+	cases := []struct {
+		name     string
+		releaseT int64
+		bonus    int64
+		ok       bool
+	}{
+		{"松手过早不能领半程奖励", 564, 1, false},
+		{"过半即可领 1 分奖励", 565, 1, true},
+		{"未划满不能领满程奖励", 1_370, 2, false},
+		{"划满领 2 分奖励", 1_371, 2, true},
+		{"任何时刻都可以放弃奖励", 1, 0, true},
+		{"负数奖励被拒绝", 800, -1, false},
+		{"超过上限的奖励被拒绝", 800, 3, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			state, err := AdvanceReplayState(chart, ModeClassic, ReplayState{}, press)
+			if err != nil {
+				t.Fatalf("长按按下应通过: %v", err)
+			}
+			state, err = AdvanceReplayState(chart, ModeClassic, state, []Event{
+				{T: tc.releaseT, Lane: 0, Judgement: JudgementRelease, HoldBonus: tc.bonus},
+			})
+			if tc.ok {
+				if err != nil {
+					t.Fatalf("按住时长足够的奖励应通过: %v", err)
+				}
+				if state.VerifiedScore != 1+tc.bonus || state.HoldOpen {
+					t.Fatalf("松手后摘要错误: %+v", state)
+				}
+			} else if err == nil || !IsValidationError(err) {
+				t.Fatalf("超出按住时长的奖励应被拒绝，得到: %v", err)
+			}
+		})
+	}
+}
+
+func TestIncrementalReplayHoldStateSurvivesCheckpointRoundTrip(t *testing.T) {
+	// 长按跨 checkpoint：按下与松手不在同一批，摘要经 JSON 落库往返后仍能复核奖励。
+	chart := regressionChart(1, 500, 2_000)
+	state, err := AdvanceReplayState(chart, ModeClassic, ReplayState{}, []Event{
+		{T: 0, Lane: 0, Judgement: JudgementHit},
+	})
+	if err != nil {
+		t.Fatalf("长按按下应通过: %v", err)
+	}
+	raw, err := json.Marshal(state)
+	if err != nil {
+		t.Fatalf("序列化重放摘要失败: %v", err)
+	}
+	var restored ReplayState
+	if err := json.Unmarshal(raw, &restored); err != nil {
+		t.Fatalf("反序列化重放摘要失败: %v", err)
+	}
+	if !restored.HoldOpen || restored.HoldDurationMS != 2_000 {
+		t.Fatalf("长按状态未随摘要持久化: %+v", restored)
+	}
+	if _, err := AdvanceReplayState(chart, ModeClassic, restored, []Event{
+		{T: 1_370, Lane: 0, Judgement: JudgementRelease, HoldBonus: 2},
+	}); err == nil {
+		t.Fatal("落库往返后仍应拒绝超出按住时长的奖励")
+	}
+	after, err := AdvanceReplayState(chart, ModeClassic, restored, []Event{
+		{T: 1_371, Lane: 0, Judgement: JudgementRelease, HoldBonus: 2},
+	})
+	if err != nil {
+		t.Fatalf("落库往返后合法奖励应通过: %v", err)
+	}
+	if after.VerifiedScore != 3 {
+		t.Fatalf("落库往返后奖励计分错误: %+v", after)
+	}
+}
+
+func TestIncrementalReplayRejectsReleaseWithoutOpenHold(t *testing.T) {
+	plain := regressionChart(2, 500)
+	if _, err := AdvanceReplayState(plain, ModeClassic, ReplayState{}, []Event{
+		{T: 0, Lane: 0, Judgement: JudgementRelease},
+	}); err == nil {
+		t.Fatal("没有长按时的松手事件应被拒绝")
+	}
+	state, err := AdvanceReplayState(plain, ModeClassic, ReplayState{}, []Event{
+		{T: 0, Lane: 0, Judgement: JudgementHit},
+	})
+	if err != nil {
+		t.Fatalf("普通命中应通过: %v", err)
+	}
+	if _, err := AdvanceReplayState(plain, ModeClassic, state, []Event{
+		{T: 100, Lane: 0, Judgement: JudgementRelease},
+	}); err == nil {
+		t.Fatal("普通块命中后的松手事件应被拒绝")
+	}
+
+	hold := regressionChart(1, 500, 2_000)
+	state, err = AdvanceReplayState(hold, ModeClassic, ReplayState{}, []Event{
+		{T: 0, Lane: 0, Judgement: JudgementHit},
+		{T: 800, Lane: 0, Judgement: JudgementRelease, HoldBonus: 1},
+	})
+	if err != nil {
+		t.Fatalf("长按松手应通过: %v", err)
+	}
+	if _, err := AdvanceReplayState(hold, ModeClassic, state, []Event{
+		{T: 900, Lane: 0, Judgement: JudgementRelease},
+	}); err == nil {
+		t.Fatal("重复松手应被拒绝")
+	}
+}
+
+func TestIncrementalReplayReleaseLaneMustMatchHold(t *testing.T) {
+	chart := regressionChart(1, 500, 2_000)
+	state, err := AdvanceReplayState(chart, ModeClassic, ReplayState{}, []Event{
+		{T: 0, Lane: 0, Judgement: JudgementHit},
+	})
+	if err != nil {
+		t.Fatalf("长按按下应通过: %v", err)
+	}
+	if _, err := AdvanceReplayState(chart, ModeClassic, state, []Event{
+		{T: 800, Lane: 1, Judgement: JudgementRelease, HoldBonus: 1},
+	}); err == nil {
+		t.Fatal("松手轨道与长按块不一致应被拒绝")
+	}
+}
+
+func TestIncrementalReplayLegacyClientHoldWithoutRelease(t *testing.T) {
+	// 旧客户端不上报松手事件：连续两个长按命中时自动收尾上一个（奖励 0），
+	// 后续松手事件按最新的长按复核。
+	chart := regressionChart(2, 500, 2_000, 2_000)
+	state, err := AdvanceReplayState(chart, ModeClassic, ReplayState{}, []Event{
+		{T: 0, Lane: 0, Judgement: JudgementHit},
+		{T: 100, Lane: 1, Judgement: JudgementHit},
+	})
+	if err != nil {
+		t.Fatalf("旧客户端连续长按命中应通过: %v", err)
+	}
+	if !state.HoldOpen || state.HoldPressT != 100 || state.HoldLane != 1 {
+		t.Fatalf("应以最新长按为进行中状态: %+v", state)
+	}
+	// 若仍绑定第一个长按（按下于 0），1470ms 已够划满（1470*1.24+300>=2000）；
+	// 绑定第二个（按下于 100）则仅 1370ms，不够。
+	if _, err := AdvanceReplayState(chart, ModeClassic, state, []Event{
+		{T: 1_470, Lane: 1, Judgement: JudgementRelease, HoldBonus: 2},
+	}); err == nil {
+		t.Fatal("奖励复核应绑定最新长按的按下时刻")
+	}
+	after, err := AdvanceReplayState(chart, ModeClassic, state, []Event{
+		{T: 1_471, Lane: 1, Judgement: JudgementRelease, HoldBonus: 2},
+	})
+	if err != nil {
+		t.Fatalf("最新长按划满应通过: %v", err)
+	}
+	if after.VerifiedScore != 4 {
+		t.Fatalf("自动收尾不应给上一个长按发奖励: %+v", after)
+	}
+}
+
+func TestIncrementalReplayHoldBonusScalesWithLapSpeed(t *testing.T) {
+	// 单音块谱面：第 2 次命中同一块即第 2 圈（lap=1），校验速度上界随圈提升，
+	// 划满同样的谱面时长所需墙钟时间更短。
+	chart := regressionChart(1, 500, 2_000)
+	state, err := AdvanceReplayState(chart, ModeClassic, ReplayState{}, []Event{
+		{T: 0, Lane: 0, Judgement: JudgementHit},
+		{T: 1_371, Lane: 0, Judgement: JudgementRelease, HoldBonus: 2},
+		{T: 1_400, Lane: 0, Judgement: JudgementHit},
+	})
+	if err != nil {
+		t.Fatalf("第 2 圈长按按下应通过: %v", err)
+	}
+	if state.HoldLap != 1 {
+		t.Fatalf("第 2 圈长按应记录 lap=1: %+v", state)
+	}
+	// lap=1 校验速度上界 136/100：划满需 elapsed*136/100 + 300 >= 2000，即 elapsed >= 1250。
+	if _, err := AdvanceReplayState(chart, ModeClassic, state, []Event{
+		{T: 1_400 + 1_249, Lane: 0, Judgement: JudgementRelease, HoldBonus: 2},
+	}); err == nil {
+		t.Fatal("第 2 圈按住时长不足不应领满奖励")
+	}
+	after, err := AdvanceReplayState(chart, ModeClassic, state, []Event{
+		{T: 1_400 + 1_250, Lane: 0, Judgement: JudgementRelease, HoldBonus: 2},
+	})
+	if err != nil {
+		t.Fatalf("第 2 圈按提速时长划满应通过: %v", err)
+	}
+	if after.VerifiedScore != 6 {
+		t.Fatalf("跨圈长按奖励计分错误: %+v", after)
+	}
+}
+
+func TestIncrementalReplayHoldBonusToleratesLapBoundarySpeedEasing(t *testing.T) {
+	// 长按是一圈的最后一块时，客户端点击瞬间就进圈提速，相机在 1.5 秒渐变期内
+	// 以高于按下圈的速度填充；按下圈 +2 圈的校验上界必须放行这类压线划满。
+	// unit 120、d=4080：上界 124/100 下划满需 elapsed >= 3049（旧的按圈速度
+	// 校验需要 3780，会把渐变期内完成的诚实划满整局作废）。
+	chart := regressionChart(1, 120, 4_080)
+	press := []Event{{T: 0, Lane: 0, Judgement: JudgementHit}}
+	state, err := AdvanceReplayState(chart, ModeClassic, ReplayState{}, press)
+	if err != nil {
+		t.Fatalf("长按按下应通过: %v", err)
+	}
+	if _, err := AdvanceReplayState(chart, ModeClassic, state, []Event{
+		{T: 3_048, Lane: 0, Judgement: JudgementRelease, HoldBonus: 2},
+	}); err == nil {
+		t.Fatal("上界之下仍应拒绝过早的满奖励")
+	}
+	after, err := AdvanceReplayState(chart, ModeClassic, state, []Event{
+		{T: 3_049, Lane: 0, Judgement: JudgementRelease, HoldBonus: 2},
+	})
+	if err != nil {
+		t.Fatalf("渐变期加速填充的划满应通过: %v", err)
+	}
+	if after.VerifiedScore != 3 {
+		t.Fatalf("渐变期划满计分错误: %+v", after)
 	}
 }
 

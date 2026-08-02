@@ -7,14 +7,17 @@ import type { ChartNote, CompiledChart, PianoTilesMode } from './types';
  * - 开局有一个独立的「开始」块，点击它才启动滚动，不计分
  * - 玩家按序点击黑块：可提前点（块已进屏即可），点错列（白块）即失败
  * - 黑块底边越过屏幕底部仍未点击 → 失败；无判定窗口，命中 +1 分
- * - 时值 >= 1.75 单位拍的音符为长按块；当前只保留交互，不计额外竞争分
+ * - 时值 >= 1.75 单位拍的音符为长按块；按住进度 >=50% 加 1 分、划满共加 2 分
  * - 曲目无限循环，每完成一圈提速；前三圈各得一枚皇冠
  * - rush 模式：同样机制，60 秒定时结束
  */
 
 /** 每圈提速比例。 */
 export const LAP_SPEED_STEP = 0.12;
-/** 服务端事件密度上限为 30 条/秒；当前内置谱面最小间隔为 120ms，3 倍约 25 条/秒。 */
+/**
+ * 服务端事件密度上限为 30 条/秒；内置谱面最小音符间隔 120ms，3 倍速下
+ * 命中约 25 条/秒，加上长按松手事件（每个长按至多 1 条）仍在上限内。
+ */
 export const MAX_SPEED_MULTIPLIER = 3;
 export const MAX_CROWNS = 3;
 /** 黑块底边越过屏幕底部后的容差毫秒（谱面时间域）。 */
@@ -23,8 +26,11 @@ export const MISS_GRACE_MS = 120;
 export const VIEW_UNITS = 4;
 /** 长按块阈值：时值 >= 1.75 × 单位拍。 */
 export const HOLD_UNITS_THRESHOLD = 1.75;
-/** 服务端权威计时落地前，长按不产生可计入积分或排行榜的额外分。 */
-export const HOLD_BONUS_MAX = 0;
+/**
+ * 长按奖励上限：进度 >=50% +1 分、划满再 +1 分（长按块总分 1/2/3）。
+ * 奖励随松手事件（r）上报，服务端按按下到松手的墙钟时长复核。
+ */
+export const HOLD_BONUS_MAX = 2;
 export const RUSH_DURATION_MS = 60_000;
 
 export type EngineStatus = 'ready' | 'running' | 'failed' | 'timeup';
@@ -73,9 +79,14 @@ export interface PianoTilesEngine {
   tap(lane: number, cameraMs: number): TapOutcome;
   /**
    * 松开长按：按当前相机进度结算加分并结束长按。
-   * 返回本次长按累计获得的加分。
+   * 返回本次长按累计获得的加分（含刚好划满自动结束的情况）。
    */
   release(cameraMs: number): number;
+  /**
+   * 取走最近一次非显式松手结束的长按（划满自动结束/被新长按顶替）及其奖励，
+   * 供调用方补发松手事件；每次结束只能取到一次。
+   */
+  takeEndedHold(): { tile: Tile; bonus: number } | null;
   /**
    * 活跃长按状态（渲染进度动画用）：
    * progress 0-1 为相机划过长按块的比例，granted 为已累计加分。
@@ -138,6 +149,8 @@ export function createEngine(chart: CompiledChart, mode: PianoTilesMode): PianoT
   let lastCamera = 0;
   /** 活跃长按：随相机推进逐步计分。fillStartMs 为填充起点（提前按下时=按下时刻）。 */
   let hold: { tile: Tile; granted: number; fillStartMs: number } | null = null;
+  /** 最近一次自动结束（划满/被新长按顶替）的长按，等待调用方取走并补发松手事件。 */
+  let endedHold: { tile: Tile; bonus: number } | null = null;
 
   const tileAt = (index: number): Tile | null => {
     if (notes.length === 0) return null;
@@ -167,8 +180,11 @@ export function createEngine(chart: CompiledChart, mode: PianoTilesMode): PianoT
       score += due - hold.granted;
       hold.granted = due;
     }
-    // 划完整块自动结束长按
-    if (cameraMs >= hold.fillStartMs + hold.tile.d) hold = null;
+    // 划完整块自动结束长按，奖励移交 endedHold 等待补发松手事件
+    if (cameraMs >= hold.fillStartMs + hold.tile.d) {
+      endedHold = { tile: hold.tile, bonus: hold.granted };
+      hold = null;
+    }
   };
 
   const engine: PianoTilesEngine = {
@@ -209,18 +225,43 @@ export function createEngine(chart: CompiledChart, mode: PianoTilesMode): PianoT
       nextIndex += 1;
       tilesHit += 1;
       score += 1;
-      if (isHold(tile)) hold = { tile, granted: 0, fillStartMs: Math.min(cameraMs, tile.t) };
+      if (isHold(tile)) {
+        // 上一个长按未显式松手就按下新长按：旧块按当前进度结清后收尾，
+        // 奖励移交 endedHold 供调用方补发松手事件。
+        if (hold) {
+          accrueHold(cameraMs);
+          if (hold) endedHold = { tile: hold.tile, bonus: hold.granted };
+        }
+        hold = { tile, granted: 0, fillStartMs: Math.min(cameraMs, tile.t) };
+      }
       const newLap = Math.floor(nextIndex / notes.length);
       if (newLap > lap) lap = newLap;
       return { kind: 'hit', tile, scoreDelta: 1 };
     },
 
     release(cameraMs) {
-      if (!hold) return 0;
+      if (!hold) {
+        // 长按可能已在最近一帧划满自动结束：代为收下待补发的奖励，避免重复上报。
+        const ended = endedHold;
+        endedHold = null;
+        return ended?.bonus ?? 0;
+      }
       accrueHold(cameraMs);
-      const granted = hold?.granted ?? HOLD_BONUS_MAX; // accrue 可能已自动完成
+      if (!hold) {
+        // accrue 恰好划满：奖励已移交 endedHold，取走后由本次松手统一上报。
+        const ended = endedHold;
+        endedHold = null;
+        return ended?.bonus ?? 0;
+      }
+      const granted = hold.granted;
       hold = null;
       return granted;
+    },
+
+    takeEndedHold() {
+      const ended = endedHold;
+      endedHold = null;
+      return ended;
     },
 
     holdState(cameraMs) {

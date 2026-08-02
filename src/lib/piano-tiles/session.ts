@@ -1,11 +1,11 @@
 import type { ChartManifestEntry, PianoTilesMode } from './types';
 import { HOLD_BONUS_MAX, type EngineResult } from './engine';
 
-/** 钢琴块事件。b 为旧协议兼容字段，当前版本必须为 0。 */
+/** 钢琴块事件。长按松手（r）的 b 为进度奖励 0..HOLD_BONUS_MAX；其余判定 b 恒为 0。 */
 export interface PianoTilesEvent {
   t: number;
   lane: number;
-  j: 'h' | 'm' | 'w';
+  j: 'h' | 'm' | 'w' | 'r';
   b: number;
 }
 
@@ -133,9 +133,9 @@ function isEvent(value: unknown): value is PianoTilesEvent {
   if (!value || typeof value !== 'object') return false;
   const event = value as Partial<PianoTilesEvent>;
   if (!isFiniteInt(event.t) || !isFiniteInt(event.lane) || event.lane > 3) return false;
-  if (event.j !== 'h' && event.j !== 'm' && event.j !== 'w') return false;
-  if (!isFiniteInt(event.b) || event.b > HOLD_BONUS_MAX) return false;
-  return event.j === 'h' ? true : event.b === 0;
+  if (event.j !== 'h' && event.j !== 'm' && event.j !== 'w' && event.j !== 'r') return false;
+  if (!isFiniteInt(event.b)) return false;
+  return event.j === 'r' ? event.b <= HOLD_BONUS_MAX : event.b === 0;
 }
 
 function isChartEntry(value: unknown): value is ChartManifestEntry {
